@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import dotenv from "dotenv";
 
 import authRoutes from "./modules/auth/auth.routes";
 import driverRoutes from "./modules/drivers/driver.routes";
@@ -11,9 +12,11 @@ import routesRouter from "./modules/routes/routes.routes";
 import stopsRouter from "./modules/stops/stops.routes";
 import tripsRoutes from "./modules/trips/trips.routes";
 import notificationRoutes from "./modules/notifications/notification.routes";
+import verificationRoutes from "./modules/verification/verification.routes";
+import adminRoutes from "./modules/admin/admin.routes"
 
 const app = express();
-
+dotenv.config();
 app.use(
   cors({
     origin: ["http://localhost:3002", "http://localhost:5173"],
@@ -34,5 +37,7 @@ app.use("/api/routes", routesRouter);
 app.use("/api/stops", stopsRouter);
 app.use("/api/trips", tripsRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/verification", verificationRoutes);
+app.use("/api/admin", adminRoutes)
 
 export default app;
