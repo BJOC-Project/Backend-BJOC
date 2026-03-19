@@ -2,19 +2,59 @@ import { Router } from "express"
 import {
   getDashboardSummary,
   getVehicleStatus,
+  getRoutes,
   getWaitingStops,
   getDriverPerformance,
   getLatestAlerts,
-  getLatestNotifications
+  getLatestNotifications,
+  getAppRatings,
+  getSuggestions
 } from "./admin.controller"
 
 const router = Router()
 
+
+
+/* ---------------- DASHBOARD ---------------- */
+
 router.get("/dashboard-summary", getDashboardSummary)
+
 router.get("/vehicle-status", getVehicleStatus)
+
+
+
+/* ---------------- ROUTES ---------------- */
+
+router.get("/routes", getRoutes)
+
+
+
+/* ---------------- PASSENGER WAITING TREND ---------------- */
+
 router.get("/waiting-stops", getWaitingStops)
+
+
+
+/* ---------------- DRIVER PERFORMANCE ---------------- */
+
 router.get("/driver-performance", getDriverPerformance)
-router.get("/latest-alerts", getLatestAlerts)
-router.get("/latest-notifications", getLatestNotifications)
+
+
+
+/* ---------------- ALERTS & NOTIFICATIONS ---------------- */
+
+router.get("/alerts", getLatestAlerts)
+
+router.get("/notifications", getLatestNotifications)
+
+
+
+/* ---------------- FEEDBACK ---------------- */
+
+router.get("/app-ratings", getAppRatings)
+
+router.get("/suggestions", getSuggestions)
+
+
 
 export default router

@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 
 import authRoutes from "./modules/auth/auth.routes";
 import driverRoutes from "./modules/drivers/driver.routes";
-import userRoutes from "./modules/users/user.routes";
+import userRoutes from "./modules/users/users.routes";
 import operatorRoutes from "./modules/operators/operator.routes";
 import passengerRoutes from "./modules/passenger/passenger.routes";
 import vehicleRoutes from "./modules/vehicles/vehicle.routes";
@@ -14,6 +14,8 @@ import tripsRoutes from "./modules/trips/trips.routes";
 import notificationRoutes from "./modules/notifications/notification.routes";
 import verificationRoutes from "./modules/verification/verification.routes";
 import adminRoutes from "./modules/admin/admin.routes"
+import reportsRoutes from "./modules/reports/reports.routes";
+import activityLogsRoutes from "./modules/activityLogs/activityLogs.routes";
 
 const app = express();
 dotenv.config();
@@ -39,5 +41,8 @@ app.use("/api/trips", tripsRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/verification", verificationRoutes);
 app.use("/api/admin", adminRoutes)
+app.use("/api/admin/reports", reportsRoutes);
+app.use("/api/activity-logs", activityLogsRoutes);
+
 
 export default app;

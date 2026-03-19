@@ -1,10 +1,10 @@
 import { supabase } from "../../config/supabase";
-import { createNotification } from '../notifications/notification.service'
+import { createNotification } from "../notifications/notification.service";
 
 export const tripsService = {
 
   /* -------------------------------
-     GET ACTIVE + SCHEDULED TRIPS
+     GET SCHEDULED + ACTIVE TRIPS
   --------------------------------*/
   async getActiveTrips() {
 
@@ -13,6 +13,7 @@ export const tripsService = {
       .select(`
         id,
         vehicle_id,
+        trip_date,
         start_time,
         scheduled_departure_time,
         status,
@@ -27,7 +28,7 @@ export const tripsService = {
           route_name
         )
       `)
-      .in("status", ["waiting", "ongoing"])
+      .in("status", ["scheduled", "ongoing"])
       .order("scheduled_departure_time", { ascending: true });
 
     if (error) {
@@ -40,6 +41,7 @@ export const tripsService = {
     return data.map((t: any) => ({
       id: t.id,
       vehicle_id: t.vehicle_id,
+      trip_date: t.trip_date,
       start_time: t.start_time,
       scheduled_departure_time: t.scheduled_departure_time,
       status: t.status,
@@ -49,7 +51,6 @@ export const tripsService = {
         : null,
       route: t.routes?.route_name ?? null
     }));
-
   },
 
   /* -------------------------
@@ -62,6 +63,7 @@ export const tripsService = {
       .select(`
         id,
         vehicle_id,
+        trip_date,
         start_time,
         scheduled_departure_time,
         end_time,
@@ -81,12 +83,12 @@ export const tripsService = {
       .order("end_time", { ascending: false });
 
     if (error) throw error;
-
     if (!data) return [];
 
     return data.map((t: any) => ({
       id: t.id,
       vehicle_id: t.vehicle_id,
+      trip_date: t.trip_date,
       start_time: t.start_time,
       scheduled_departure_time: t.scheduled_departure_time,
       end_time: t.end_time,
@@ -97,7 +99,6 @@ export const tripsService = {
         : null,
       route: t.routes?.route_name ?? null
     }));
-
   },
 
   /* -------------------------
@@ -109,7 +110,7 @@ export const tripsService = {
       .from("trips")
       .select("id, vehicle_id")
       .eq("vehicle_id", vehicle_id)
-      .in("status", ["waiting", "ongoing"])
+      .in("status", ["scheduled", "ongoing"])
       .maybeSingle();
 
     if (error) {
@@ -118,17 +119,16 @@ export const tripsService = {
     }
 
     return data;
-
   },
 
   /* -------------------------
-     CREATE SCHEDULED TRIP
+     ADMIN: CREATE SCHEDULED TRIP
   --------------------------*/
-  async startTrip(payload: {
+  async scheduleTrip(payload: {
     vehicle_id: string;
     route_id: string;
-    route_direction?: string;
-    scheduled_departure_time?: string;
+    trip_date: string;
+    scheduled_departure_time: string;
   }) {
 
     const { data, error } = await supabase
@@ -136,8 +136,9 @@ export const tripsService = {
       .insert({
         vehicle_id: payload.vehicle_id,
         route_id: payload.route_id,
-        scheduled_departure_time: payload.scheduled_departure_time ?? null,
-        status: "waiting",
+        trip_date: payload.trip_date,
+        scheduled_departure_time: payload.scheduled_departure_time,
+        status: "scheduled",
         current_stop_order: 1
       })
       .select()
@@ -156,8 +157,40 @@ export const tripsService = {
 
     return data;
   },
+
   /* -------------------------
-     END TRIP
+     DRIVER: START TRIP
+  --------------------------*/
+  async startTrip(tripId: string) {
+
+    const { data, error } = await supabase
+      .from("trips")
+      .update({
+        status: "ongoing",
+        start_time: new Date()
+      })
+      .eq("id", tripId)
+      .eq("status", "scheduled")
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await createNotification({
+      title: "Trip Started",
+      message: `Driver started the trip`,
+      type: "trip",
+      severity: "info",
+      target_role: "admin",
+      entity_type: "trip",
+      entity_id: tripId
+    });
+
+    return data;
+  },
+
+  /* -------------------------
+     DRIVER: END TRIP
   --------------------------*/
   async endTrip(tripId: string) {
 
@@ -168,6 +201,7 @@ export const tripsService = {
         end_time: new Date()
       })
       .eq("id", tripId)
+      .eq("status", "ongoing")
       .select()
       .single();
 
@@ -185,8 +219,9 @@ export const tripsService = {
 
     return data;
   },
+
   /* -------------------------
-          CANCEL TRIP
+     CANCEL SCHEDULED TRIP
   --------------------------*/
   async cancelTrip(tripId: string) {
 
@@ -196,7 +231,7 @@ export const tripsService = {
         status: "cancelled"
       })
       .eq("id", tripId)
-      .eq("status", "waiting")
+      .eq("status", "scheduled")
       .select()
       .single();
 
@@ -229,14 +264,15 @@ export const tripsService = {
         scheduled_departure_time
       })
       .eq("id", tripId)
-      .eq("status", "waiting") // only scheduled trips
+      .eq("status", "scheduled")
       .select()
       .single();
 
     if (error) throw error;
 
     return data;
-
   }
 
 };
+
+

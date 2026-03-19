@@ -93,14 +93,11 @@ export async function updateDriver(id: string, payload: any) {
 }
 
 export async function deleteDriver(id: string) {
-
   const { error } = await supabase
     .from("drivers")
     .delete()
     .eq("id", id);
-
   if (error) throw error;
-
   return true;
-
 }
+

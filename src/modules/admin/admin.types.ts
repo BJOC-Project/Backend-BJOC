@@ -18,6 +18,7 @@ export type WaitingStop = {
 export type DriverPerformance = {
   driver: string
   rating: number
+  trips: number
 }
 
 export type AlertItem = {

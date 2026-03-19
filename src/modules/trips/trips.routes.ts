@@ -8,7 +8,7 @@ const router = Router();
 router.use(authMiddleware);
 
 /* =========================
-   GET ACTIVE TRIPS
+   GET ACTIVE + SCHEDULED TRIPS
 ========================= */
 router.get(
   "/active",
@@ -26,11 +26,20 @@ router.get(
 );
 
 /* =========================
-   START (SCHEDULE) TRIP
+   ADMIN: SCHEDULE TRIP
 ========================= */
 router.post(
-  "/start",
-  roleMiddleware(["admin","operator"]),
+  "/schedule",
+  roleMiddleware(["admin", "operator"]),
+  tripsController.scheduleTrip
+);
+
+/* =========================
+   DRIVER: START TRIP
+========================= */
+router.patch(
+  "/:id/start",
+  roleMiddleware(["driver", "admin", "operator"]),
   tripsController.startTrip
 );
 
@@ -39,7 +48,7 @@ router.post(
 ========================= */
 router.patch(
   "/:id/reschedule",
-  roleMiddleware(["admin","operator"]),
+  roleMiddleware(["admin", "operator"]),
   tripsController.rescheduleTrip
 );
 
@@ -48,16 +57,16 @@ router.patch(
 ========================= */
 router.patch(
   "/:id/cancel",
-  roleMiddleware(["admin","operator"]),
+  roleMiddleware(["admin", "operator"]),
   tripsController.cancelTrip
 );
 
 /* =========================
-   END TRIP
+   DRIVER: END TRIP
 ========================= */
-router.put(
+router.patch(
   "/:id/end",
-  roleMiddleware(["driver","admin", "operator"]),
+  roleMiddleware(["driver", "admin", "operator"]),
   tripsController.endTrip
 );
 
