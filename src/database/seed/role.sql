@@ -1,4 +1,4 @@
-﻿insert into public.roles (name)
+insert into public.roles (name)
 values
   ('admin'),
   ('driver'),

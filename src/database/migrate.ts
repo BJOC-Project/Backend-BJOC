@@ -7,7 +7,7 @@ async function runMigrations() {
   assertDatabaseUrlReady();
 
   try {
-    await migrate(db, { migrationsFolder: "./drizzle" });
+    await migrate(db, { migrationsFolder: "./src/database/migration" });
     logger.info("Database migrations finished");
   } finally {
     await pool.end();

@@ -15,8 +15,9 @@ const envSchema = z.object({
   EMAIL_USER: z.string().email("EMAIL_USER must be a valid email"),
   EMAIL_PASS: z.string().min(1, "EMAIL_PASS is required"),
   EMAIL_FROM: z.string().email().optional(),
-  DEFAULT_ADMIN_EMAIL: z.string().email().optional(),
-  DEFAULT_ADMIN_PASSWORD: z.string().min(8).optional()
+  SUPABASE_URL: z.url("SUPABASE_URL must be a valid URL"),
+  SUPABASE_ANON_KEY: z.string().min(1, "SUPABASE_ANON_KEY is required"),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

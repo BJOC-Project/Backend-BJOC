@@ -10,7 +10,7 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "generate": "drizzle-kit generate --config drizzle.config.ts",
+    "generate": "drizzle-kit generate --config src/database/drizzle.config.ts",
     "migrate": "tsx src/database/migrate.ts",
     "drop": "tsx src/database/drop.ts",
     "seed": "tsx src/database/seed.ts"
