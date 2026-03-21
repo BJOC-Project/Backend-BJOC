@@ -1,6 +1,6 @@
 ﻿import type { Request, Response } from "express";
-import { asyncHandler } from "../../utils/async-handler";
-import { sendSuccess } from "../../utils/response";
+import { asyncHandler } from "../../library/async-handler";
+import { sendSuccess } from "../../library/response";
 import { adminListUsers, adminViewProfile } from "./admin.service";
 
 export const adminGetUsers = asyncHandler(async (req: Request, res: Response) => {

@@ -2,7 +2,7 @@
 import { db } from "../../database/db";
 import { drivers, passengers, roles, staff, users, type AppRole } from "../../database/schema";
 import { NotFoundError } from "../../errors/app-error";
-import { buildPaginationMeta, resolvePagination, type PaginationInput } from "../../utils/pagination";
+import { buildPaginationMeta, resolvePagination, type PaginationInput } from "../../library/pagination";
 
 export interface UserProfile {
   id: string;
