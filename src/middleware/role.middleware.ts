@@ -1,16 +1,21 @@
-import { Request, Response, NextFunction } from "express";
+﻿import type { NextFunction, Request, Response } from "express";
+import type { AppRole } from "../database/schema";
+import { ForbiddenError, UnauthorizedError } from "../errors/app-error";
 
-export const roleMiddleware = (roles: string[]) => {
-  return (req: Request, res: Response, next: NextFunction) => {
+export function authorizeRoles(...allowedRoles: AppRole[]) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    const authUser = req.authUser;
 
-    const user = (req as any).user;
+    if (!authUser) {
+      next(new UnauthorizedError("Authentication is required"));
+      return;
+    }
 
-    if (!roles.includes(user.role)) {
-      return res.status(403).json({
-        message: "Access forbidden"
-      });
+    if (!allowedRoles.includes(authUser.role)) {
+      next(new ForbiddenError("You do not have access to this resource"));
+      return;
     }
 
     next();
   };
-};
+}

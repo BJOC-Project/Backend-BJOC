@@ -1,35 +1,21 @@
-import { Request, Response, NextFunction } from "express";
-import { supabase } from "../config/supabase";
+﻿import type { NextFunction, Request, Response } from "express";
+import { UnauthorizedError } from "../errors/app-error";
+import { verifyAccessToken } from "../library/jwt";
 
-export const authMiddleware = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
+export function authenticateRequest(req: Request, _res: Response, next: NextFunction) {
+  const authorizationHeader = req.headers.authorization;
 
-  const token = req.headers.authorization?.replace("Bearer ", "");
-
-  if (!token) {
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!authorizationHeader?.startsWith("Bearer ")) {
+    next(new UnauthorizedError("Missing bearer token"));
+    return;
   }
 
-  const { data, error } = await supabase.auth.getUser(token);
+  const token = authorizationHeader.replace("Bearer ", "").trim();
 
-  if (error || !data.user) {
-    return res.status(401).json({ message: "Invalid token" });
+  try {
+    req.authUser = verifyAccessToken(token);
+    next();
+  } catch {
+    next(new UnauthorizedError("Invalid or expired token"));
   }
-
-  // get role
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", data.user.id)
-    .single();
-
-  (req as any).user = {
-    ...data.user,
-    role: profile?.role
-  };
-
-  next();
-};
+}

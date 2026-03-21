@@ -1,19 +1,11 @@
-import { Router } from "express";
-import {
-  fetchDrivers,
-  addDriver,
-  editDriver,
-  removeDriver
-} from "./driver.controller";
+﻿import { Router } from "express";
+import { authenticateRequest } from "../../middleware/auth.middleware";
+import { authorizeRoles } from "../../middleware/role.middleware";
+import { driverGetProfile } from "./driver.controller";
 
 const router = Router();
 
-router.get("/", fetchDrivers);
-
-router.post("/", addDriver);
-
-router.put("/:id", editDriver);
-
-router.delete("/:id", removeDriver);
+router.use(authenticateRequest, authorizeRoles("driver"));
+router.get("/profile", driverGetProfile);
 
 export default router;

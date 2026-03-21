@@ -1,19 +1,11 @@
-import { Router } from "express";
-import {
-  fetchPassengers,
-  addPassenger,
-  removePassenger,
-  editPassenger
-} from "./passenger.controller";
+﻿import { Router } from "express";
+import { authenticateRequest } from "../../middleware/auth.middleware";
+import { authorizeRoles } from "../../middleware/role.middleware";
+import { passengerGetProfile } from "./passenger.controller";
 
 const router = Router();
 
-router.get("/", fetchPassengers);
-
-router.post("/", addPassenger);
-
-router.put("/:id", editPassenger); // UPDATE
-
-router.delete("/:id", removePassenger);
+router.use(authenticateRequest, authorizeRoles("passenger"));
+router.get("/profile", passengerGetProfile);
 
 export default router;

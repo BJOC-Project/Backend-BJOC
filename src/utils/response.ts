@@ -1,13 +1,10 @@
-export const success = (res: any, data: any) => {
-  res.json({
-    success: true,
-    data
-  });
-};
+﻿import type { Response } from "express";
 
-export const error = (res: any, message: string) => {
-  res.status(500).json({
-    success: false,
-    message
+export function sendSuccess<T>(res: Response, data: T, message = "OK", statusCode = 200, meta?: Record<string, unknown>) {
+  return res.status(statusCode).json({
+    success: true,
+    message,
+    data,
+    ...(meta ? { meta } : {}),
   });
-};
+}

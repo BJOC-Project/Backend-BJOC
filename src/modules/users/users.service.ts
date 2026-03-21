@@ -1,278 +1,248 @@
-import { supabase } from "../../config/supabase"
+﻿import { and, count, desc, eq, ilike, or } from "drizzle-orm";
+import { db } from "../../database/db";
+import { drivers, passengers, roles, staff, users, type AppRole } from "../../database/schema";
+import { NotFoundError } from "../../errors/app-error";
+import { buildPaginationMeta, resolvePagination, type PaginationInput } from "../../utils/pagination";
 
-type GetUsersParams = {
-  search?: string
-  role?: string
-  status?: string
-  from?: string
-  to?: string
-  sort?: "asc" | "desc"
+export interface UserProfile {
+  id: string;
+  email: string;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  profileUrl: string | null;
+  contact: string | null;
+  status: string;
+  role: AppRole;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  driver: {
+    licenseNumber: string | null;
+    status: string | null;
+    lastActive: Date | null;
+  } | null;
+  passenger: {
+    username: string | null;
+    status: string | null;
+  } | null;
+  staff: {
+    department: string | null;
+    position: string | null;
+  } | null;
 }
 
-/* --------------------------------
-   GET USERS
--------------------------------- */
-
-export const getUsersService = async ({
-  search,
-  role,
-  status,
-  from,
-  to,
-  sort = "desc"
-}: GetUsersParams) => {
-
-  let query = supabase
-    .from("users_view")
-    .select("*")
-    .order("created_at", { ascending: sort === "asc" })
-
-  if (search) query = query.ilike("name", `%${search}%`)
-  if (role) query = query.eq("role", role)
-  if (status) query = query.eq("status", status)
-  if (from) query = query.gte("created_at", from)
-  if (to) query = query.lte("created_at", to)
-
-  const { data, error } = await query
-
-  if (error) throw new Error(error.message)
-
-  return data ?? []
+export interface UserListFilters extends PaginationInput {
+  search?: string;
+  role?: AppRole;
+  status?: string;
 }
 
-/* --------------------------------
-   GET USER BY ID
--------------------------------- */
-
-export const getUserByIdService = async (id: string) => {
-
-  const { data, error } = await supabase
-    .from("users_view")
-    .select("*")
-    .eq("id", id)
-    .single()
-
-  if (error) throw new Error(error.message)
-
-  return data
+export interface AuthLookupUser {
+  id: string;
+  email: string;
+  passwordHash: string;
+  firstName: string;
+  lastName: string;
+  status: string;
+  role: AppRole;
 }
 
-/* --------------------------------
-   UPDATE USER
--------------------------------- */
-
-export const updateUserService = async (
-  id: string,
-  first_name?: string,
-  middle_name?: string,
-  last_name?: string,
-  role?: string
-) => {
-
-  const updateData: any = {}
-
-  if (first_name) updateData.first_name = first_name
-  if (middle_name !== undefined) updateData.middle_name = middle_name
-  if (last_name) updateData.last_name = last_name
-  if (role) updateData.role = role
-
-  // ✅ keep name synced
-  if (first_name || middle_name || last_name) {
-    updateData.name = `${first_name ?? ""} ${middle_name ?? ""} ${last_name ?? ""}`.trim()
+function toAppRole(roleName: string): AppRole {
+  if (roleName === "admin" || roleName === "driver" || roleName === "passenger" || roleName === "staff") {
+    return roleName;
   }
 
-  const { data, error } = await supabase
-    .from("profiles")
-    .update(updateData)
-    .eq("id", id)
-    .select()
-    .single()
-
-  if (error) throw new Error(error.message)
-
-  return data
+  throw new NotFoundError(`Unsupported role found in database: ${roleName}`);
 }
 
-/* --------------------------------
-   DELETE USER
--------------------------------- */
+function mapUserProfile(row: {
+  id: string;
+  email: string;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  profileUrl: string | null;
+  contact: string | null;
+  status: string;
+  role: string;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  driverLicenseNumber: string | null;
+  driverStatus: string | null;
+  driverLastActive: Date | null;
+  passengerUsername: string | null;
+  passengerStatus: string | null;
+  staffDepartment: string | null;
+  staffPosition: string | null;
+}): UserProfile {
+  const role = toAppRole(row.role);
 
-export const deleteUserService = async (id: string) => {
-
-  const { data, error } = await supabase
-    .from("profiles")
-    .update({ status: "deleted" })
-    .eq("id", id)
-    .select()
-    .single()
-
-  if (error) throw new Error(error.message)
-
-  return data
+  return {
+    id: row.id,
+    email: row.email,
+    firstName: row.firstName,
+    middleName: row.middleName,
+    lastName: row.lastName,
+    profileUrl: row.profileUrl,
+    contact: row.contact,
+    status: row.status,
+    role,
+    lastLoginAt: row.lastLoginAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    driver: row.driverLicenseNumber || row.driverStatus || row.driverLastActive
+      ? {
+          licenseNumber: row.driverLicenseNumber,
+          status: row.driverStatus,
+          lastActive: row.driverLastActive,
+        }
+      : null,
+    passenger: row.passengerUsername || row.passengerStatus
+      ? {
+          username: row.passengerUsername,
+          status: row.passengerStatus,
+        }
+      : null,
+    staff: row.staffDepartment || row.staffPosition
+      ? {
+          department: row.staffDepartment,
+          position: row.staffPosition,
+        }
+      : null,
+  };
 }
 
-/* --------------------------------
-   SUSPEND USER
--------------------------------- */
-
-export const suspendUserService = async (
-  id: string,
-  days: number,
-  reason: string
-) => {
-
-  const suspendedUntil = new Date()
-  suspendedUntil.setDate(suspendedUntil.getDate() + days)
-
-  const { data, error } = await supabase
-    .from("profiles")
-    .update({
-      status: "suspended",
-      suspended_until: suspendedUntil.toISOString(),
-      suspension_reason: reason
+export async function usersFindUserForAuth(email: string): Promise<AuthLookupUser | null> {
+  const [user] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      passwordHash: users.passwordHash,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      status: users.status,
+      role: roles.name,
     })
-    .eq("id", id)
-    .select()
-    .single()
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(eq(users.email, email.toLowerCase()))
+    .limit(1);
 
-  if (error) throw new Error(error.message)
+  if (!user) {
+    return null;
+  }
 
-  return data
+  return {
+    ...user,
+    role: toAppRole(user.role),
+  };
 }
 
-/* --------------------------------
-   UNSUSPEND USER
--------------------------------- */
-
-export const unsuspendUserService = async (id: string) => {
-
-  const { data, error } = await supabase
-    .from("profiles")
-    .update({
-      status: "active",
-      suspended_until: null,
-      suspension_reason: null
+export async function usersFindUserProfileById(userId: string): Promise<UserProfile> {
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      firstName: users.firstName,
+      middleName: users.middleName,
+      lastName: users.lastName,
+      profileUrl: users.profileUrl,
+      contact: users.contact,
+      status: users.status,
+      role: roles.name,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+      driverLicenseNumber: drivers.licenseNumber,
+      driverStatus: drivers.status,
+      driverLastActive: drivers.lastActive,
+      passengerUsername: passengers.username,
+      passengerStatus: passengers.status,
+      staffDepartment: staff.department,
+      staffPosition: staff.position,
     })
-    .eq("id", id)
-    .select()
-    .single()
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .leftJoin(drivers, eq(drivers.userId, users.id))
+    .leftJoin(passengers, eq(passengers.userId, users.id))
+    .leftJoin(staff, eq(staff.userId, users.id))
+    .where(eq(users.id, userId))
+    .limit(1);
 
-  if (error) throw new Error(error.message)
+  if (!row) {
+    throw new NotFoundError("User not found");
+  }
 
-  return data
+  return mapUserProfile(row);
 }
 
-/* --------------------------------
-   CREATE USER (FINAL FIX)
--------------------------------- */
+export async function usersListUsers(filters: UserListFilters) {
+  const pagination = resolvePagination(filters);
+  const searchValue = filters.search?.trim();
+  const clauses = [];
 
-export const createUserService = async ({
-  email,
-  password,
-  first_name,
-  middle_name,
-  last_name,
-  role,
-  contact_number,
-  license_number
-}: {
-  email: string
-  password: string
-  first_name: string
-  middle_name?: string
-  last_name: string
-  role: string
-  contact_number?: string
-  license_number?: string
-}) => {
-
-  const allowedRoles = ["admin", "operator", "driver", "passenger"]
-
-  if (!allowedRoles.includes(role)) {
-    throw new Error("Invalid role")
+  if (filters.role) {
+    clauses.push(eq(roles.name, filters.role));
   }
 
-  /* -------------------------------
-     1. CREATE AUTH USER
-  -------------------------------- */
+  if (filters.status) {
+    clauses.push(eq(users.status, filters.status as "active" | "inactive" | "suspended"));
+  }
 
-  const { data: authData, error: authError } =
-    await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: false
+  if (searchValue) {
+    clauses.push(
+      or(
+        ilike(users.email, `%${searchValue}%`),
+        ilike(users.firstName, `%${searchValue}%`),
+        ilike(users.lastName, `%${searchValue}%`),
+      )!,
+    );
+  }
+
+  const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(whereClause);
+
+  const rows = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      firstName: users.firstName,
+      middleName: users.middleName,
+      lastName: users.lastName,
+      profileUrl: users.profileUrl,
+      contact: users.contact,
+      status: users.status,
+      role: roles.name,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+      driverLicenseNumber: drivers.licenseNumber,
+      driverStatus: drivers.status,
+      driverLastActive: drivers.lastActive,
+      passengerUsername: passengers.username,
+      passengerStatus: passengers.status,
+      staffDepartment: staff.department,
+      staffPosition: staff.position,
     })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .leftJoin(drivers, eq(drivers.userId, users.id))
+    .leftJoin(passengers, eq(passengers.userId, users.id))
+    .leftJoin(staff, eq(staff.userId, users.id))
+    .where(whereClause)
+    .orderBy(desc(users.createdAt))
+    .limit(pagination.limit)
+    .offset(pagination.offset);
 
-  if (authError) {
-    throw new Error("Auth error: " + authError.message)
-  }
-
-  if (!authData?.user) {
-    throw new Error("User creation failed")
-  }
-
-  const userId = authData.user.id
-
-  /* -------------------------------
-     2. CREATE FULL NAME (REQUIRED)
-  -------------------------------- */
-
-  const fullName = `${first_name} ${middle_name ?? ""} ${last_name}`.trim()
-
-  /* -------------------------------
-     3. INSERT PROFILE
-  -------------------------------- */
-
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .insert({
-      id: userId,
-      name: fullName, // ✅ REQUIRED FIX
-      first_name,
-      middle_name,
-      last_name,
-      email,
-      contact_number,
-      role,
-      status: "active"
-    })
-    .select()
-    .single()
-
-  if (profileError) {
-
-    // 🔥 IMPORTANT: rollback auth user if profile fails
-    await supabase.auth.admin.deleteUser(userId)
-
-    throw new Error("Profile error: " + profileError.message)
-  }
-
-  /* -------------------------------
-     4. DRIVER EXTRA TABLE
-  -------------------------------- */
-
-  if (role === "driver") {
-
-    if (!license_number) {
-      throw new Error("License number is required for driver")
-    }
-
-    const { error: driverError } = await supabase
-      .from("drivers")
-      .insert({
-        user_id: userId,
-        first_name,
-        middle_name,
-        last_name,
-        email,
-        contact_number,
-        license_number
-      })
-
-    if (driverError) {
-      throw new Error("Driver error: " + driverError.message)
-    }
-  }
-
-  return profile
+  return {
+    items: rows.map(mapUserProfile),
+    meta: buildPaginationMeta(totalRow?.total ?? 0, pagination),
+  };
 }

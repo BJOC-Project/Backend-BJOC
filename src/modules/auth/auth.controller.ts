@@ -1,33 +1,19 @@
-import { Request, Response } from "express";
-import * as authService from "./auth.service";
+﻿import type { Request, Response } from "express";
+import { asyncHandler } from "../../utils/async-handler";
+import { sendSuccess } from "../../utils/response";
+import { authGetCurrentUser, authLogin, authRegisterPassenger } from "./auth.service";
 
-export const login = async (req: Request, res: Response) => {
+export const authRegister = asyncHandler(async (req: Request, res: Response) => {
+  const result = await authRegisterPassenger(req.body);
+  sendSuccess(res, result, "Registration successful", 201);
+});
 
-  try {
+export const authLoginUser = asyncHandler(async (req: Request, res: Response) => {
+  const result = await authLogin(req.body);
+  sendSuccess(res, result, "Login successful");
+});
 
-    const { email, password } = req.body;
-
-    const result = await authService.loginUser(email, password);
-
-    const role = result.profile.role;
-
-    if (role !== "admin" && role !== "operator") {
-      return res.status(403).json({
-        message: "Access denied. Not allowed to login in web panel."
-      });
-    }
-
-    res.json({
-      message: "Login successful",
-      user: result.profile,
-      token: result.session?.access_token
-    });
-
-  } catch (error: any) {
-
-    res.status(401).json({
-      message: error.message
-    });
-
-  }
-};
+export const authGetMe = asyncHandler(async (req: Request, res: Response) => {
+  const result = await authGetCurrentUser(req.authUser!.userId);
+  sendSuccess(res, result, "Authenticated user loaded");
+});

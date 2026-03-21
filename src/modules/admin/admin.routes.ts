@@ -1,60 +1,12 @@
-import { Router } from "express"
-import {
-  getDashboardSummary,
-  getVehicleStatus,
-  getRoutes,
-  getWaitingStops,
-  getDriverPerformance,
-  getLatestAlerts,
-  getLatestNotifications,
-  getAppRatings,
-  getSuggestions
-} from "./admin.controller"
+﻿import { Router } from "express";
+import { authenticateRequest } from "../../middleware/auth.middleware";
+import { authorizeRoles } from "../../middleware/role.middleware";
+import { adminGetProfile, adminGetUsers } from "./admin.controller";
 
-const router = Router()
+const router = Router();
 
+router.use(authenticateRequest, authorizeRoles("admin"));
+router.get("/profile", adminGetProfile);
+router.get("/users", adminGetUsers);
 
-
-/* ---------------- DASHBOARD ---------------- */
-
-router.get("/dashboard-summary", getDashboardSummary)
-
-router.get("/vehicle-status", getVehicleStatus)
-
-
-
-/* ---------------- ROUTES ---------------- */
-
-router.get("/routes", getRoutes)
-
-
-
-/* ---------------- PASSENGER WAITING TREND ---------------- */
-
-router.get("/waiting-stops", getWaitingStops)
-
-
-
-/* ---------------- DRIVER PERFORMANCE ---------------- */
-
-router.get("/driver-performance", getDriverPerformance)
-
-
-
-/* ---------------- ALERTS & NOTIFICATIONS ---------------- */
-
-router.get("/alerts", getLatestAlerts)
-
-router.get("/notifications", getLatestNotifications)
-
-
-
-/* ---------------- FEEDBACK ---------------- */
-
-router.get("/app-ratings", getAppRatings)
-
-router.get("/suggestions", getSuggestions)
-
-
-
-export default router
+export default router;
