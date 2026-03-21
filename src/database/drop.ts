@@ -1,27 +1,13 @@
-﻿import { assertDatabaseUrlReady } from "../config/env";
+import { assertDatabaseUrlReady } from "../config/env";
 import { logger } from "../config/logger";
 import { pool } from "./db";
 
 const dropSql = `
-DO $$
-DECLARE
-  current_table RECORD;
-  current_type RECORD;
-BEGIN
-  FOR current_table IN SELECT tablename FROM pg_tables WHERE schemaname = 'public'
-  LOOP
-    EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', current_table.tablename);
-  END LOOP;
-
-  FOR current_type IN
-    SELECT typname
-    FROM pg_type
-    WHERE typnamespace = 'public'::regnamespace
-      AND typtype = 'e'
-  LOOP
-    EXECUTE format('DROP TYPE IF EXISTS public.%I CASCADE', current_type.typname);
-  END LOOP;
-END $$;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO public;
+DROP SCHEMA IF EXISTS drizzle CASCADE;
 `;
 
 async function dropDatabaseObjects() {
@@ -29,7 +15,7 @@ async function dropDatabaseObjects() {
 
   try {
     await pool.query(dropSql);
-    logger.info("Dropped public tables and enums");
+    logger.info("Dropped public and drizzle schemas");
   } finally {
     await pool.end();
   }
