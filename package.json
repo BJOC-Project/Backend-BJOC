@@ -15,7 +15,12 @@
     "drop": "tsx src/database/drop.ts",
     "seed": "tsx src/database/seed.ts"
   },
-  "keywords": ["express", "drizzle", "jwt", "typescript"],
+  "keywords": [
+    "express",
+    "drizzle",
+    "jwt",
+    "typescript"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",

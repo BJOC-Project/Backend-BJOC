@@ -1,5 +1,5 @@
-﻿import cors from "cors";
-import express from "express";
+import cors from "cors";
+import express, { type Request, type Response } from "express";
 import pinoHttp from "pino-http";
 import { appEnv } from "./config/env";
 import { logger } from "./config/logger";
@@ -12,10 +12,51 @@ import healthRoutes from "./modules/health/health.routes";
 import passengerRoutes from "./modules/passenger/passenger.routes";
 import staffRoutes from "./modules/staff/staff.routes";
 
+type TimedResponse = Response & {
+  responseTime?: number;
+};
+
 const app = express();
 
+function buildHttpLogObject(req: Request, res: TimedResponse) {
+  return {
+    method: req.method,
+    path: req.originalUrl,
+    statusCode: res.statusCode,
+    durationMs: typeof res.responseTime === "number" ? Math.round(res.responseTime) : undefined,
+    userId: req.authUser?.userId,
+    role: req.authUser?.role,
+  };
+}
+
 app.disable("x-powered-by");
-app.use(pinoHttp({ logger }));
+app.use(
+  pinoHttp({
+    logger,
+    autoLogging: {
+      ignore: (req) => req.url === "/api/health",
+    },
+    quietReqLogger: true,
+    customSuccessMessage: () => "HTTP request completed",
+    customErrorMessage: () => "HTTP request failed",
+    customLogLevel: (_req, res, error) => {
+      if (error || res.statusCode >= 500) {
+        return "error";
+      }
+
+      if (res.statusCode >= 400) {
+        return "warn";
+      }
+
+      return "info";
+    },
+    customSuccessObject: (req, res) => buildHttpLogObject(req, res as TimedResponse),
+    customErrorObject: (req, res, error) => ({
+      ...buildHttpLogObject(req, res as TimedResponse),
+      error,
+    }),
+  }),
+);
 
 function isAllowedCorsOrigin(origin: string) {
   if (appEnv.corsOrigins.includes(origin)) {

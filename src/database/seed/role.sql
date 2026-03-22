@@ -1,7 +1,3 @@
 insert into public.roles (name)
-values
-  ('admin'),
-  ('driver'),
-  ('passenger'),
-  ('staff')
+values ('Admin'), ('Staff'), ('Driver'), ('Passenger')
 on conflict (name) do nothing;
