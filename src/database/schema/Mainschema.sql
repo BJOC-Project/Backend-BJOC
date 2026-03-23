@@ -76,7 +76,6 @@ create index vehicles_status_idx on public.vehicles(status);
 
 create table public.routes (
   id uuid primary key default gen_random_uuid(),
-  route_name text not null,
   start_location text,
   end_location text,
   is_active boolean not null default true,
