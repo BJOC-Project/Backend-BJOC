@@ -9,7 +9,11 @@ interface RequestSchema {
 }
 
 export function validate(schema: RequestSchema) {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  return (
+    req: Request,
+    _res: Response,
+    next: NextFunction,
+  ) => {
     try {
       if (schema.body) {
         req.body = schema.body.parse(req.body);
@@ -20,7 +24,12 @@ export function validate(schema: RequestSchema) {
       }
 
       if (schema.query) {
-        req.query = schema.query.parse(req.query) as Request["query"];
+        const parsedQuery = schema.query.parse(req.query) as Record<string, unknown>;
+        Object.defineProperty(req, "query", {
+          configurable: true,
+          enumerable: true,
+          value: parsedQuery,
+        });
       }
 
       next();

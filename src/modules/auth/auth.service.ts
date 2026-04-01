@@ -1,6 +1,6 @@
-﻿import { eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../../database/db";
-import { passengers, roles, users } from "../../database/schema";
+import { passengers, roles, users, vehicleAssignments } from "../../database/schema";
 import { ConflictError, ForbiddenError, UnauthorizedError } from "../../errors/app-error";
 import { comparePassword, hashPassword } from "../../library/bcrypt";
 import { sendWelcomeEmail } from "../../library/email";
@@ -41,6 +41,27 @@ function buildAuthResponse(user: {
     accessToken,
     user,
   };
+}
+
+async function assertDriverHasAssignedVehicle(user: {
+  id: string;
+  role: "admin" | "driver" | "passenger" | "staff";
+}) {
+  if (user.role !== "driver") {
+    return;
+  }
+
+  const [assignmentRow] = await db
+    .select({
+      vehicleId: vehicleAssignments.vehicleId,
+    })
+    .from(vehicleAssignments)
+    .where(eq(vehicleAssignments.driverUserId, user.id))
+    .limit(1);
+
+  if (!assignmentRow?.vehicleId) {
+    throw new ForbiddenError("Driver must be assigned to a vehicle before logging in.");
+  }
 }
 
 export async function authRegisterPassenger(input: RegisterInput): Promise<AuthResponse> {
@@ -117,6 +138,8 @@ export async function authLogin(input: LoginInput): Promise<AuthResponse> {
     throw new ForbiddenError("This account is suspended");
   }
 
+  await assertDriverHasAssignedVehicle(user);
+
   await db.update(users).set({ lastLoginAt: new Date(), updatedAt: new Date() }).where(eq(users.id, user.id));
 
   return buildAuthResponse({
@@ -129,6 +152,8 @@ export async function authLogin(input: LoginInput): Promise<AuthResponse> {
   });
 }
 
-export function authGetCurrentUser(userId: string) {
-  return usersFindUserProfileById(userId);
+export async function authGetCurrentUser(userId: string) {
+  const user = await usersFindUserProfileById(userId);
+  await assertDriverHasAssignedVehicle(user);
+  return user;
 }

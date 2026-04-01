@@ -2,6 +2,9 @@
 import { sendSuccess } from "../../library/response";
 import { healthGetStatus } from "./health.service";
 
-export function healthCheck(_req: Request, res: Response) {
+export function healthCheck(
+  _req: Request,
+  res: Response,
+) {
   sendSuccess(res, healthGetStatus(), "Service is healthy");
 }

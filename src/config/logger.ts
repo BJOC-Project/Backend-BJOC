@@ -19,7 +19,10 @@ const logLevel =
 
 const reservedLogKeys = new Set(["level", "msg", "name", "time"]);
 
-function pad(value: number, size = 2) {
+function pad(
+  value: number,
+  size = 2,
+) {
   return value.toString().padStart(size, "0");
 }
 
@@ -55,8 +58,14 @@ function formatLogRecord(record: LogRecord) {
   const header = `[${formatTimestamp(record.time ?? Date.now())}] ${record.level ?? "INFO"} (${serviceName}): ${record.msg ?? ""}`;
 
   const detailLines = Object.entries(record)
-    .filter(([key, value]) => !reservedLogKeys.has(key) && typeof value !== "undefined")
-    .map(([key, value]) => `${key}: ${formatLogValue(value)}`);
+    .filter(([
+      key,
+      value,
+    ]) => !reservedLogKeys.has(key) && typeof value !== "undefined")
+    .map(([
+      key,
+      value,
+    ]) => `${key}: ${formatLogValue(value)}`);
 
   return `${header}${detailLines.length ? `\n${detailLines.join("\n")}` : ""}\n`;
 }

@@ -27,7 +27,10 @@ export function resolvePagination(input: PaginationInput): PaginationResult {
   };
 }
 
-export function buildPaginationMeta(total: number, pagination: PaginationResult) {
+export function buildPaginationMeta(
+  total: number,
+  pagination: PaginationResult,
+) {
   return {
     page: pagination.page,
     limit: pagination.limit,

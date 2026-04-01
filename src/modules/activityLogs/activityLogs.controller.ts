@@ -1,26 +1,14 @@
-import { Request, Response } from "express";
+import type { Request, Response } from "express";
+import { asyncHandler } from "../../library/async-handler";
+import { sendSuccess } from "../../library/response";
 import { getActivityLogsService } from "./activityLogs.service";
+import type { ActivityLogsQuery } from "./activityLogs.validation";
 
-export const getActivityLogs = async (req: Request, res: Response) => {
-
-  try {
-
-    const { search, module, action } = req.query;
-
-    const logs = await getActivityLogsService(
-      search as string,
-      module as string,
-      action as string
-    );
-
-    res.json(logs);
-
-  } catch (error: any) {
-
-    res.status(500).json({
-      message: error.message || "Failed to fetch activity logs"
-    });
-
-  }
-
-};
+export const getActivityLogs = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const query = req.query as unknown as ActivityLogsQuery;
+  const result = await getActivityLogsService(query);
+  sendSuccess(res, result, "Activity logs loaded");
+});

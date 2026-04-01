@@ -1,0 +1,89 @@
+import type { Request, Response } from "express";
+import { asyncHandler } from "../../library/async-handler";
+import { sendSuccess } from "../../library/response";
+import { NotFoundError } from "../../errors/app-error";
+import {
+  bookRouteForPassenger,
+  findBestRoute,
+  routeCreateRoute,
+  routeDeleteRoute,
+  routeListRoutes,
+  routePublishRoute,
+  routeUpdateRoute,
+} from "./routes.service";
+import type {
+  BookRouteBody,
+  CreateRouteBody,
+  PlanRouteQuery,
+  RouteIdParams,
+  UpdateRouteBody,
+} from "./routes.validation";
+
+export const planRoute = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const query = req.query as unknown as PlanRouteQuery;
+  const result = await findBestRoute(query);
+
+  if (!result) {
+    throw new NotFoundError("No direct jeepney route found for this journey.");
+  }
+
+  sendSuccess(res, result, "Route plan generated");
+});
+
+export const bookRoute = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as BookRouteBody;
+  const result = await bookRouteForPassenger(req.authUser!.userId, body);
+
+  sendSuccess(res, result, "Route booked successfully", 201);
+});
+
+export const routeGetAll = asyncHandler(async (
+  _req: Request,
+  res: Response,
+) => {
+  const result = await routeListRoutes();
+  sendSuccess(res, result, "Routes loaded");
+});
+
+export const routeCreate = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as CreateRouteBody;
+  const result = await routeCreateRoute(body, req.authUser?.userId);
+  sendSuccess(res, result, "Route created", 201);
+});
+
+export const routeUpdate = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as UpdateRouteBody;
+  const params = req.params as unknown as RouteIdParams;
+  const result = await routeUpdateRoute(params.routeId, body, req.authUser?.userId);
+  sendSuccess(res, result, "Route updated");
+});
+
+export const routeDelete = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const params = req.params as unknown as RouteIdParams;
+  const result = await routeDeleteRoute(params.routeId, req.authUser?.userId);
+  sendSuccess(res, result, "Route deleted");
+});
+
+export const routePublish = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const params = req.params as unknown as RouteIdParams;
+  const result = await routePublishRoute(params.routeId, req.authUser?.userId);
+  sendSuccess(res, result, "Route published");
+});

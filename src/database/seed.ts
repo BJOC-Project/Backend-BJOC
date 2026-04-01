@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import { logger } from "../config/logger";
 import { assertDatabaseUrlReady } from "../config/env";
 import { pool } from "./db";
+import { seedAppFeedback } from "./seed/seed-feedback";
+import { seedDriverDashboardData } from "./seed/seed-driver-dashboard";
+import { seedRoutes } from "./seed/seed-routes";
 
 async function runSqlSeed(filename: string) {
   const sql = (await readFile(resolve(process.cwd(), `src/database/seed/${filename}`), "utf8")).replace(/^\uFEFF/, "");
@@ -15,6 +18,9 @@ async function runSeed() {
   try {
     await runSqlSeed("role.sql");
     await runSqlSeed("user.sql");
+    await seedRoutes();
+    await seedDriverDashboardData();
+    await seedAppFeedback();
     logger.info("Database seed finished");
   } finally {
     await pool.end();

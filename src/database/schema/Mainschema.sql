@@ -74,8 +74,17 @@ create table public.vehicles (
 
 create index vehicles_status_idx on public.vehicles(status);
 
+create table public.vehicle_assignments (
+  vehicle_id uuid primary key,
+  driver_user_id uuid not null unique,
+  created_at timestamptz not null default now(),
+  constraint vehicle_assignments_vehicle_fk foreign key (vehicle_id) references public.vehicles(id) on delete cascade,
+  constraint vehicle_assignments_driver_fk foreign key (driver_user_id) references public.users(id) on delete cascade
+);
+
 create table public.routes (
   id uuid primary key default gen_random_uuid(),
+  route_name text,
   start_location text,
   end_location text,
   is_active boolean not null default true,
@@ -173,3 +182,17 @@ create table public.notifications (
 );
 
 create index notifications_target_read_idx on public.notifications(target_user_id, is_read);
+
+create table public.app_feedback (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  rating int,
+  message text,
+  category text,
+  created_at timestamptz not null default now(),
+  constraint app_feedback_user_fk foreign key (user_id) references public.users(id) on delete set null
+);
+
+create index app_feedback_created_at_idx on public.app_feedback(created_at);
+create index app_feedback_rating_idx on public.app_feedback(rating);
+create index app_feedback_user_id_idx on public.app_feedback(user_id);

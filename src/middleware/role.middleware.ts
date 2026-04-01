@@ -3,7 +3,11 @@ import type { AppRole } from "../database/schema";
 import { ForbiddenError, UnauthorizedError } from "../errors/app-error";
 
 export function authorizeRoles(...allowedRoles: AppRole[]) {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  return (
+    req: Request,
+    _res: Response,
+    next: NextFunction,
+  ) => {
     const authUser = req.authUser;
 
     if (!authUser) {

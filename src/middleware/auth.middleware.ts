@@ -2,7 +2,11 @@
 import { UnauthorizedError } from "../errors/app-error";
 import { verifyAccessToken } from "../library/jwt";
 
-export function authenticateRequest(req: Request, _res: Response, next: NextFunction) {
+export function authenticateRequest(
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+) {
   const authorizationHeader = req.headers.authorization;
 
   if (!authorizationHeader?.startsWith("Bearer ")) {

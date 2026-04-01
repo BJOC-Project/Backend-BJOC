@@ -39,7 +39,6 @@
     "src/modules/notifications/**/*",
     "src/modules/operators/**/*",
     "src/modules/reports/**/*",
-    "src/modules/routes/**/*",
     "src/modules/stops/**/*",
     "src/modules/trips/**/*",
     "src/modules/verification/**/*",

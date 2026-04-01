@@ -3,8 +3,16 @@ import { appEnv } from "../config/env";
 import { logger } from "../config/logger";
 import { AppError } from "../errors/app-error";
 
-export function errorMiddleware(error: unknown, req: Request, res: Response, _next: NextFunction) {
-  const appError = error instanceof AppError ? error : new AppError("Something went wrong", 500, "INTERNAL_SERVER_ERROR");
+export function errorMiddleware(
+  error: unknown,
+  req: Request,
+  res: Response,
+  _next: NextFunction,
+) {
+  const appError =
+    error instanceof AppError
+      ? error
+      : new AppError("Something went wrong", 500, "INTERNAL_SERVER_ERROR");
 
   logger.error(
     {

@@ -12,8 +12,16 @@ function isSupabaseHost(hostname: string) {
   return hostname.endsWith(".supabase.co");
 }
 
-const lookupWithIpv6Fallback: LookupFunction = (hostname, options, callback) => {
-  lookup(hostname, options, (lookupError, address, family) => {
+const lookupWithIpv6Fallback: LookupFunction = (
+  hostname,
+  options,
+  callback,
+) => {
+  lookup(hostname, options, (
+    lookupError,
+    address,
+    family,
+  ) => {
     if (!lookupError) {
       callback(null, address, family);
       return;
@@ -24,7 +32,10 @@ const lookupWithIpv6Fallback: LookupFunction = (hostname, options, callback) => 
       return;
     }
 
-    resolve6(hostname, (resolveError, addresses) => {
+    resolve6(hostname, (
+      resolveError,
+      addresses,
+    ) => {
       if (resolveError || !addresses.length) {
         callback(lookupError, "", 0);
         return;
