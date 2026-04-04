@@ -41,4 +41,19 @@ describe("trip lifecycle routes", () => {
     expect(response.body.success).toBe(false);
     expect(response.body.message).toBe("Validation failed");
   });
+
+  it("returns 400 when only one start-trip coordinate is provided", async () => {
+    const driverToken = createTestAccessToken("driver");
+
+    const response = await request(app)
+      .patch("/api/trips/11111111-1111-1111-1111-111111111111/start")
+      .set("Authorization", `Bearer ${driverToken}`)
+      .send({
+        latitude: 14.5995,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.message).toBe("Validation failed");
+  });
 });

@@ -16,6 +16,7 @@ import {
   scheduleTripBodySchema,
   tripEndBodySchema,
   tripIdParamSchema,
+  tripStartBodySchema,
 } from "./trips.validation";
 
 const router = Router();
@@ -24,7 +25,7 @@ router.use(authenticateRequest);
 router.get("/active", authorizeRoles("admin", "staff"), tripGetActive);
 router.get("/history", authorizeRoles("admin", "staff"), tripGetHistory);
 router.post("/schedule", authorizeRoles("admin", "staff"), validate({ body: scheduleTripBodySchema }), tripSchedule);
-router.patch("/:tripId/start", authorizeRoles("admin", "staff", "driver"), validate({ params: tripIdParamSchema }), tripStart);
+router.patch("/:tripId/start", authorizeRoles("admin", "staff", "driver"), validate({ body: tripStartBodySchema, params: tripIdParamSchema }), tripStart);
 router.patch("/:tripId/end", authorizeRoles("admin", "staff", "driver"), validate({ body: tripEndBodySchema, params: tripIdParamSchema }), tripEnd);
 router.patch("/:tripId/cancel", authorizeRoles("admin", "staff"), validate({ params: tripIdParamSchema }), tripCancel);
 router.patch("/:tripId/reschedule", authorizeRoles("admin", "staff"), validate({ body: rescheduleTripBodySchema, params: tripIdParamSchema }), tripReschedule);

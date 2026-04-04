@@ -15,6 +15,7 @@ import { db } from "../../database/db";
 import {
   activityLogs,
   drivers,
+  gpsLogs,
   notifications,
   passengerTrips,
   roles,
@@ -38,6 +39,7 @@ const EARTH_RADIUS_KM = 6371;
 const AVG_ROUTE_SPEED_KPH = 18;
 const ROUTE_STOP_INTERVAL_MINUTES = 5;
 const MIN_TRIP_OCCUPANCY_MINUTES = 30;
+const DRIVER_TRIP_START_RADIUS_KM = 1;
 
 type DateFilter = "today" | "week" | "month";
 
@@ -86,6 +88,11 @@ type RouteCreateInput = {
 };
 
 type RouteUpdateInput = Partial<RouteCreateInput>;
+
+type TripStartInput = {
+  latitude?: number;
+  longitude?: number;
+};
 
 type StopCreateInput = {
   latitude: number;
@@ -539,18 +546,20 @@ async function assertDriverOwnsTripIfNeeded(input: {
   driverUserId: string | null;
 }) {
   if (!input.actorUserId) {
-    return;
+    return null;
   }
 
   const actorRole = await getActorRole(input.actorUserId);
 
   if (actorRole !== "driver") {
-    return;
+    return actorRole;
   }
 
   if (!input.driverUserId || input.driverUserId !== input.actorUserId) {
     throw new ForbiddenError("Drivers can only update trips assigned to them.");
   }
+
+  return actorRole;
 }
 
 async function getVehicleSeatCapacity(vehicleId: string | null) {
@@ -2137,6 +2146,97 @@ async function getTripForMutation(tripId: string) {
   return tripRow;
 }
 
+async function getRouteStartStop(routeId: string): Promise<{
+  id: string;
+  latitude: number;
+  longitude: number;
+  stopName: string | null;
+  stopOrder: number;
+}> {
+  const [startStopRow] = await db
+    .select({
+      id: stops.id,
+      latitude: stops.latitude,
+      longitude: stops.longitude,
+      stopName: stops.stopName,
+      stopOrder: stops.stopOrder,
+    })
+    .from(stops)
+    .where(
+      and(
+        eq(stops.routeId, routeId),
+        eq(stops.isActive, true),
+      ),
+    )
+    .orderBy(asc(stops.stopOrder))
+    .limit(1);
+
+  if (!startStopRow) {
+    throw new BadRequestError("This route does not have a starting stop configured yet.");
+  }
+
+  if (typeof startStopRow.latitude !== "number" || typeof startStopRow.longitude !== "number") {
+    throw new BadRequestError("The route starting stop is missing coordinates. Please update the route before starting the trip.");
+  }
+
+  return {
+    id: startStopRow.id,
+    latitude: startStopRow.latitude,
+    longitude: startStopRow.longitude,
+    stopName: startStopRow.stopName,
+    stopOrder: startStopRow.stopOrder,
+  };
+}
+
+function buildStartStopLabel(input: {
+  stopName: string | null;
+  stopOrder: number;
+}) {
+  return input.stopName?.trim() || `Stop ${input.stopOrder}`;
+}
+
+async function assertDriverStartLocationIfNeeded(input: {
+  actorRole: string | null;
+  latitude?: number;
+  longitude?: number;
+  routeId: string;
+}) {
+  if (input.actorRole !== "driver") {
+    return null;
+  }
+
+  if (typeof input.latitude !== "number" || typeof input.longitude !== "number") {
+    throw new BadRequestError("Current driver location is required before starting a trip.");
+  }
+
+  const routeStartStop = await getRouteStartStop(input.routeId);
+  const distanceKm = haversineDistanceKm(
+    input.latitude,
+    input.longitude,
+    routeStartStop.latitude,
+    routeStartStop.longitude,
+  );
+
+  if (distanceKm > DRIVER_TRIP_START_RADIUS_KM) {
+    const startStopLabel = buildStartStopLabel(routeStartStop);
+
+    throw new BadRequestError(
+      `You must be within 1 kilometer of ${startStopLabel} to start this trip. Current distance: ${distanceKm.toFixed(2)} km.`,
+      {
+        allowed_radius_km: DRIVER_TRIP_START_RADIUS_KM,
+        current_distance_km: Number(distanceKm.toFixed(2)),
+        start_stop_id: routeStartStop.id,
+        start_stop_name: startStopLabel,
+      },
+    );
+  }
+
+  return {
+    distanceKm,
+    routeStartStop,
+  };
+}
+
 async function findEmergencyHistoryTripByClientActionId(clientActionId: string) {
   const [reportRow] = await db
     .select({
@@ -2157,11 +2257,12 @@ async function findEmergencyHistoryTripByClientActionId(clientActionId: string) 
 
 export async function operationsStartTrip(
   tripId: string,
+  input: TripStartInput = {},
   actorUserId?: string,
 ) {
   const tripRow = await getTripForMutation(tripId);
 
-  await assertDriverOwnsTripIfNeeded({
+  const actorRole = await assertDriverOwnsTripIfNeeded({
     actorUserId,
     driverUserId: tripRow.driverUserId,
   });
@@ -2173,6 +2274,13 @@ export async function operationsStartTrip(
   await assertVehicleCapacityConfigured({
     tripId,
     vehicleId: tripRow.vehicleId,
+  });
+
+  const startLocationCheck = await assertDriverStartLocationIfNeeded({
+    actorRole,
+    latitude: input.latitude,
+    longitude: input.longitude,
+    routeId: tripRow.routeId,
   });
 
   const now = new Date();
@@ -2204,14 +2312,58 @@ export async function operationsStartTrip(
         })
         .where(eq(drivers.userId, tripRow.driverUserId));
     }
+
+    if (
+      tripRow.vehicleId &&
+      typeof input.latitude === "number" &&
+      typeof input.longitude === "number"
+    ) {
+      await tx
+        .insert(vehicleLocations)
+        .values({
+          currentStopId: startLocationCheck?.routeStartStop.id ?? null,
+          isOffRoute: false,
+          latitude: input.latitude,
+          longitude: input.longitude,
+          offRouteDetectedAt: null,
+          offRouteDistanceMeters: 0,
+          lastOffRouteAlertAt: null,
+          updatedAt: now,
+          vehicleId: tripRow.vehicleId,
+        })
+        .onConflictDoUpdate({
+          target: vehicleLocations.vehicleId,
+          set: {
+            currentStopId: startLocationCheck?.routeStartStop.id ?? null,
+            isOffRoute: false,
+            latitude: input.latitude,
+            longitude: input.longitude,
+            offRouteDetectedAt: null,
+            offRouteDistanceMeters: 0,
+            lastOffRouteAlertAt: null,
+            updatedAt: now,
+          },
+        });
+
+      await tx.insert(gpsLogs).values({
+        latitude: input.latitude,
+        longitude: input.longitude,
+        recordedAt: now,
+        vehicleId: tripRow.vehicleId,
+      });
+    }
   });
 
   await writeActivityLog({
     action: "START_TRIP",
     description: `Started trip ${tripId}.`,
     metadata: {
+      driver_start_distance_km: startLocationCheck
+        ? Number(startLocationCheck.distanceKm.toFixed(2))
+        : null,
       next_state: "ongoing",
       previous_state: tripRow.status,
+      start_stop_id: startLocationCheck?.routeStartStop.id ?? null,
       trip_id: tripId,
     },
     module: "trips",

@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, lte, or } from "drizzle-orm";
 import { db } from "../../database/db";
 import {
   drivers,
@@ -77,11 +77,14 @@ export interface UserProfile {
 }
 
 export interface UserListFilters {
+  from?: unknown;
   limit?: unknown;
   page?: unknown;
   role?: unknown;
   search?: unknown;
+  sort?: unknown;
   status?: unknown;
+  to?: unknown;
 }
 
 export interface CreateUserInput {
@@ -133,6 +136,30 @@ function normalizeAppRole(value: string) {
   }
 
   return null;
+}
+
+function parseDateAtStartOfDay(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(`${value}T00:00:00.000`);
+
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed;
+}
+
+function parseDateAtEndOfDay(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(`${value}T23:59:59.999`);
+
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed;
 }
 
 function toAppRole(value: string): AppRole {
@@ -317,13 +344,24 @@ export async function usersListUsers(query: UserListFilters) {
     limit: takeFirstString(query.limit),
     page: takeFirstString(query.page),
   });
+  const fromDate = parseDateAtStartOfDay(takeFirstString(query.from)?.trim());
+  const toDate = parseDateAtEndOfDay(takeFirstString(query.to)?.trim());
   const search = takeFirstString(query.search)?.trim();
   const requestedRole = takeFirstString(query.role)?.trim().toLowerCase();
+  const requestedSort = takeFirstString(query.sort)?.trim().toLowerCase();
   const requestedStatus = takeFirstString(query.status)?.trim().toLowerCase();
   const normalizedRole = requestedRole ? normalizeAppRole(requestedRole) : null;
   const normalizedStatus = requestedStatus === "active" || requestedStatus === "inactive" || requestedStatus === "suspended"
     ? requestedStatus
     : null;
+
+  if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+    throw new BadRequestError("The start date cannot be later than the end date.");
+  }
+
+  const sortDirection = requestedSort === "asc"
+    ? "asc"
+    : "desc";
   const filters = [
     search
       ? or(
@@ -339,41 +377,91 @@ export async function usersListUsers(query: UserListFilters) {
     normalizedStatus
       ? eq(users.status, normalizedStatus)
       : undefined,
+    fromDate
+      ? gte(users.createdAt, fromDate)
+      : undefined,
+    toDate
+      ? lte(users.createdAt, toDate)
+      : undefined,
   ].filter(Boolean);
   const whereClause = filters.length > 0 ? and(...filters) : undefined;
-  const items = await db
-    .select({
-      contact: users.contact,
-      createdAt: users.createdAt,
-      email: users.email,
-      firstName: users.firstName,
-      id: users.id,
-      lastName: users.lastName,
-      middleName: users.middleName,
-      profileUrl: users.profileUrl,
-      role: roles.name,
-      status: users.status,
-      suspendedUntil: users.suspendedUntil,
-      suspensionReason: users.suspensionReason,
-      updatedAt: users.updatedAt,
-    })
-    .from(users)
-    .innerJoin(roles, eq(users.roleId, roles.id))
-    .where(whereClause)
-    .orderBy(desc(users.createdAt))
-    .limit(pagination.limit)
-    .offset(pagination.offset);
-  const [totalRow] = await db
-    .select({
-      total: count(users.id),
-    })
-    .from(users)
-    .innerJoin(roles, eq(users.roleId, roles.id))
-    .where(whereClause);
+  const activeStatusClause = filters.length > 0
+    ? and(
+      ...filters,
+      or(
+        eq(users.status, "active"),
+        eq(users.status, "inactive"),
+      ),
+    )
+    : or(
+      eq(users.status, "active"),
+      eq(users.status, "inactive"),
+    );
+  const suspendedStatusClause = filters.length > 0
+    ? and(
+      ...filters,
+      eq(users.status, "suspended"),
+    )
+    : eq(users.status, "suspended");
+  const [
+    items,
+    [totalRow],
+    [activeRow],
+    [suspendedRow],
+  ] = await Promise.all([
+    db
+      .select({
+        contact: users.contact,
+        createdAt: users.createdAt,
+        email: users.email,
+        firstName: users.firstName,
+        id: users.id,
+        lastName: users.lastName,
+        middleName: users.middleName,
+        profileUrl: users.profileUrl,
+        role: roles.name,
+        status: users.status,
+        suspendedUntil: users.suspendedUntil,
+        suspensionReason: users.suspensionReason,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(whereClause)
+      .orderBy(sortDirection === "asc" ? asc(users.createdAt) : desc(users.createdAt))
+      .limit(pagination.limit)
+      .offset(pagination.offset),
+    db
+      .select({
+        total: count(users.id),
+      })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(whereClause),
+    db
+      .select({
+        total: count(users.id),
+      })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(activeStatusClause),
+    db
+      .select({
+        total: count(users.id),
+      })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(suspendedStatusClause),
+  ]);
 
   return {
     items: items.map((row) => mapUserProfile(row)),
-    meta: buildPaginationMeta(Number(totalRow?.total ?? 0), pagination),
+    meta: {
+      ...buildPaginationMeta(Number(totalRow?.total ?? 0), pagination),
+      activeCount: Number(activeRow?.total ?? 0),
+      suspendedCount: Number(suspendedRow?.total ?? 0),
+      sort: sortDirection,
+    },
   };
 }
 

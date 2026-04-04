@@ -22,9 +22,9 @@ const envSchema = z.object({
     z.boolean(),
     z.string().trim().toLowerCase().transform((value) => value === "true"),
   ]).optional(),
-  SUPABASE_URL: z.url("SUPABASE_URL must be a valid URL"),
-  SUPABASE_ANON_KEY: z.string().min(1, "SUPABASE_ANON_KEY is required"),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  SUPABASE_URL: z.url("SUPABASE_URL must be a valid URL").optional(),
+  SUPABASE_ANON_KEY: z.string().min(1, "SUPABASE_ANON_KEY is required").optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required").optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

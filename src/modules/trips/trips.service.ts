@@ -7,7 +7,7 @@ import {
   operationsScheduleTrip,
   operationsStartTrip,
 } from "../operations/operations.service";
-import type { RescheduleTripBody, ScheduleTripBody, TripEndBody } from "./trips.validation";
+import type { RescheduleTripBody, ScheduleTripBody, TripEndBody, TripStartBody } from "./trips.validation";
 
 export function tripListActiveTrips() {
   return operationsListActiveTrips();
@@ -26,9 +26,10 @@ export function tripScheduleTrip(
 
 export function tripStartTrip(
   tripId: string,
+  input: TripStartBody,
   actorUserId?: string,
 ) {
-  return operationsStartTrip(tripId, actorUserId);
+  return operationsStartTrip(tripId, input, actorUserId);
 }
 
 export function tripEndTrip(

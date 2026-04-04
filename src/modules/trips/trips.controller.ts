@@ -15,6 +15,7 @@ import type {
   ScheduleTripBody,
   TripEndBody,
   TripIdParams,
+  TripStartBody,
 } from "./trips.validation";
 
 export const tripGetActive = asyncHandler(async (
@@ -47,7 +48,8 @@ export const tripStart = asyncHandler(async (
   res: Response,
 ) => {
   const params = req.params as unknown as TripIdParams;
-  const result = await tripStartTrip(params.tripId, req.authUser?.userId);
+  const body = req.body as TripStartBody;
+  const result = await tripStartTrip(params.tripId, body, req.authUser?.userId);
   sendSuccess(res, result, "Trip started");
 });
 

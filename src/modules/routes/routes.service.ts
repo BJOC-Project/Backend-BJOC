@@ -1,7 +1,7 @@
-import { and, asc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, sql } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
-import { passengerTrips, passengers, stops, transitRoutes, trips } from "../../database/schema";
+import { passengerTrips, passengers, stops, transitRoutes, trips, vehicles } from "../../database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "../../errors/app-error";
 import {
   operationsCreateRoute,
@@ -22,6 +22,9 @@ const BASE_FARE = 13;
 const FARE_PER_KM = 1.8;
 const FREE_KM = 4;
 const AVG_SPEED_KPH = 18;
+const ACTIVE_BOOKING_STATUSES = ["booked", "waiting", "onboard"] as const;
+
+type DbExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 interface StopRow {
   stopId: string;
@@ -309,15 +312,21 @@ async function resolveBookingSegment(input: BookRouteBody) {
   };
 }
 
-async function findNextScheduledTrip(routeId: string) {
-  const [scheduledTrip] = await db
+async function findNextScheduledTrip(
+  executor: DbExecutor,
+  routeId: string,
+) {
+  const [scheduledTrip] = await executor
     .select({
       id: trips.id,
       scheduledDepartureTime: trips.scheduledDepartureTime,
       tripDate: trips.tripDate,
       status: trips.status,
+      vehicleId: trips.vehicleId,
+      seatCapacity: vehicles.capacity,
     })
     .from(trips)
+    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
     .where(
       and(
         eq(trips.routeId, routeId),
@@ -336,12 +345,13 @@ async function findNextScheduledTrip(routeId: string) {
 }
 
 async function ensureNoActiveDuplicateBooking(
+  executor: DbExecutor,
   passengerUserId: string,
   tripId: string,
   pickupStopId: string,
   dropoffStopId: string,
 ) {
-  const [existingBooking] = await db
+  const [existingBooking] = await executor
     .select({ id: passengerTrips.id })
     .from(passengerTrips)
     .where(
@@ -350,13 +360,72 @@ async function ensureNoActiveDuplicateBooking(
         eq(passengerTrips.tripId, tripId),
         eq(passengerTrips.pickupStopId, pickupStopId),
         eq(passengerTrips.dropoffStopId, dropoffStopId),
-        inArray(passengerTrips.status, ["booked", "waiting", "onboard"]),
+        inArray(passengerTrips.status, ACTIVE_BOOKING_STATUSES),
       ),
     )
     .limit(1);
 
   if (existingBooking) {
     throw new ConflictError("You already have an active booking for this trip.");
+  }
+}
+
+async function lockScheduledTripForBooking(
+  executor: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tripId: string,
+) {
+  await executor.execute(sql`select id from trips where id = ${tripId} for update`);
+}
+
+async function assertScheduledTripHasAvailableCapacity(
+  executor: DbExecutor,
+  input: {
+    seatCapacity: number | null;
+    tripId: string;
+    vehicleId: string | null;
+  },
+) {
+  if (!input.vehicleId) {
+    throw new BadRequestError(
+      "The next scheduled trip for this route cannot accept bookings yet because it does not have an assigned vehicle.",
+      {
+        trip_id: input.tripId,
+      },
+    );
+  }
+
+  if (input.seatCapacity === null || input.seatCapacity <= 0) {
+    throw new BadRequestError(
+      "The next scheduled trip for this route cannot accept bookings yet because the assigned vehicle has no valid passenger capacity.",
+      {
+        seat_capacity: input.seatCapacity,
+        trip_id: input.tripId,
+        vehicle_id: input.vehicleId,
+      },
+    );
+  }
+
+  const [activeBookingRow] = await executor
+    .select({
+      activeBookingCount: count(passengerTrips.id),
+    })
+    .from(passengerTrips)
+    .where(
+      and(
+        eq(passengerTrips.tripId, input.tripId),
+        inArray(passengerTrips.status, ACTIVE_BOOKING_STATUSES),
+      ),
+    );
+
+  const activeBookingCount = Number(activeBookingRow?.activeBookingCount ?? 0);
+
+  if (activeBookingCount >= input.seatCapacity) {
+    throw new BadRequestError("No seats are currently available on the next scheduled trip for this route.", {
+      active_bookings: activeBookingCount,
+      seat_capacity: input.seatCapacity,
+      trip_id: input.tripId,
+      vehicle_id: input.vehicleId,
+    });
   }
 }
 
@@ -425,37 +494,53 @@ export async function bookRouteForPassenger(
   await ensurePassengerExists(passengerUserId);
 
   const bookingSegment = await resolveBookingSegment(input);
-  const scheduledTrip = await findNextScheduledTrip(input.routeId);
-
-  await ensureNoActiveDuplicateBooking(
-    passengerUserId,
-    scheduledTrip.id,
-    bookingSegment.pickupStop.stopId,
-    bookingSegment.dropoffStop.stopId,
-  );
-
   const fare = calculateFare(bookingSegment.distanceKm);
+  const {
+    createdBooking,
+    scheduledTrip,
+  } = await db.transaction(async (tx) => {
+    const scheduledTrip = await findNextScheduledTrip(tx, input.routeId);
 
-  const [createdBooking] = await db
-    .insert(passengerTrips)
-    .values({
+    await lockScheduledTripForBooking(tx, scheduledTrip.id);
+    await ensureNoActiveDuplicateBooking(
+      tx,
       passengerUserId,
+      scheduledTrip.id,
+      bookingSegment.pickupStop.stopId,
+      bookingSegment.dropoffStop.stopId,
+    );
+    await assertScheduledTripHasAvailableCapacity(tx, {
+      seatCapacity: scheduledTrip.seatCapacity,
       tripId: scheduledTrip.id,
-      pickupStopId: bookingSegment.pickupStop.stopId,
-      dropoffStopId: bookingSegment.dropoffStop.stopId,
-      status: "booked",
-      fare,
-    })
-    .returning({
-      id: passengerTrips.id,
-      status: passengerTrips.status,
-      fare: passengerTrips.fare,
-      createdAt: passengerTrips.createdAt,
+      vehicleId: scheduledTrip.vehicleId,
     });
 
-  if (!createdBooking) {
-    throw new BadRequestError("Unable to create route booking.");
-  }
+    const [createdBooking] = await tx
+      .insert(passengerTrips)
+      .values({
+        passengerUserId,
+        tripId: scheduledTrip.id,
+        pickupStopId: bookingSegment.pickupStop.stopId,
+        dropoffStopId: bookingSegment.dropoffStop.stopId,
+        status: "booked",
+        fare,
+      })
+      .returning({
+        id: passengerTrips.id,
+        status: passengerTrips.status,
+        fare: passengerTrips.fare,
+        createdAt: passengerTrips.createdAt,
+      });
+
+    if (!createdBooking) {
+      throw new BadRequestError("Unable to create route booking.");
+    }
+
+    return {
+      createdBooking,
+      scheduledTrip,
+    };
+  });
 
   logger.info({
     msg: "Passenger route booked",
