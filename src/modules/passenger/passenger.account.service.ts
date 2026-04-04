@@ -1,11 +1,13 @@
 import { createHash, randomInt } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { logger } from "../../config/logger";
 import { db } from "../../database/db";
 import { emailChangeRequests, users } from "../../database/schema";
 import {
   BadRequestError,
   ConflictError,
   NotFoundError,
+  ServiceUnavailableError,
   UnauthorizedError,
 } from "../../errors/app-error";
 import { comparePassword, hashPassword } from "../../library/bcrypt";
@@ -139,11 +141,30 @@ export async function passengerRequestEmailChange(
       },
     });
 
-  await sendEmailChangeVerificationEmail(
-    nextEmail,
-    user.firstName,
-    verificationCode,
-  );
+  try {
+    await sendEmailChangeVerificationEmail(
+      nextEmail,
+      user.firstName,
+      verificationCode,
+    );
+  } catch (error) {
+    await db.delete(emailChangeRequests).where(eq(emailChangeRequests.userId, userId));
+
+    logger.error({
+      msg: "Passenger email verification code could not be delivered",
+      error,
+      nextEmail,
+      userId,
+    });
+
+    if (error instanceof ServiceUnavailableError) {
+      throw error;
+    }
+
+    throw new ServiceUnavailableError(
+      "Verification email could not be sent. Please try again in a moment.",
+    );
+  }
 
   return {
     expiresAt: expiresAt.toISOString(),

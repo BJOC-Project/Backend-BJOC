@@ -7,9 +7,11 @@ import {
   adminGetDashboardSummary,
   adminGetDriverPerformance,
   adminGetLiveMap,
+  adminGetMaintenanceSettings,
   adminGetNotifications,
   adminGetRoutes,
   adminGetSuggestions,
+  adminUpdateMaintenanceSettings,
   adminGetVehicleStatus,
   adminGetWaitingStops,
   adminListUsers,
@@ -17,6 +19,7 @@ import {
 } from "./admin.service";
 import type {
   DashboardFilterQuery,
+  SystemMaintenanceSettingsBody,
   WaitingStopsQuery,
 } from "./admin.validation";
 
@@ -119,4 +122,21 @@ export const adminLiveMap = asyncHandler(async (
 ) => {
   const result = await adminGetLiveMap();
   sendSuccess(res, result, "Live map loaded");
+});
+
+export const adminMaintenanceSettings = asyncHandler(async (
+  _req: Request,
+  res: Response,
+) => {
+  const result = await adminGetMaintenanceSettings();
+  sendSuccess(res, result, "System maintenance settings loaded");
+});
+
+export const adminUpdateSettings = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as SystemMaintenanceSettingsBody;
+  const result = await adminUpdateMaintenanceSettings(body, req.authUser?.userId);
+  sendSuccess(res, result, "System maintenance settings updated");
 });

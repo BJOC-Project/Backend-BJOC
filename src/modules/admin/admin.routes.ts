@@ -7,17 +7,20 @@ import {
   adminAppRatings,
   adminDriverPerformance,
   adminGetDashboard,
+  adminMaintenanceSettings,
   adminGetProfile,
   adminGetUsers,
   adminLiveMap,
   adminNotifications,
   adminRoutes,
   adminSuggestions,
+  adminUpdateSettings,
   adminVehicleStatus,
   adminWaitingStops,
 } from "./admin.controller";
 import {
   dashboardFilterQuerySchema,
+  systemMaintenanceSettingsBodySchema,
   waitingStopsQuerySchema,
 } from "./admin.validation";
 
@@ -36,5 +39,7 @@ router.get("/notifications", adminNotifications);
 router.get("/app-ratings", validate({ query: dashboardFilterQuerySchema }), adminAppRatings);
 router.get("/suggestions", validate({ query: dashboardFilterQuerySchema }), adminSuggestions);
 router.get("/live-map", adminLiveMap);
+router.get("/settings/maintenance", adminMaintenanceSettings);
+router.patch("/settings/maintenance", validate({ body: systemMaintenanceSettingsBodySchema }), adminUpdateSettings);
 
 export default router;

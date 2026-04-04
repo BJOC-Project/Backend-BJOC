@@ -1,4 +1,6 @@
 import { z } from "zod";
+export { systemMaintenanceSettingsBodySchema } from "../system-settings/system-settings.validation";
+export type { SystemMaintenanceSettingsBody } from "../system-settings/system-settings.validation";
 
 export const dashboardFilterQuerySchema = z.object({
   filter: z.enum([

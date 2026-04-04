@@ -9,6 +9,11 @@ import {
   operationsGetPassengerWaitingStops,
 } from "../operations/operations.service";
 import { feedbackGetAppRatings, feedbackGetSuggestions } from "../feedback/feedback.service";
+import {
+  systemSettingsGetMaintenanceSettings,
+  systemSettingsUpdateMaintenanceSettings,
+} from "../system-settings/system-settings.service";
+import type { SystemMaintenanceSettingsBody } from "../system-settings/system-settings.validation";
 import { usersFindUserProfileById, usersListUsers } from "../users/users.service";
 import type { AdminUserListQuery } from "./admin.types";
 
@@ -65,4 +70,15 @@ export function adminGetSuggestions(filter?: string) {
 
 export function adminGetLiveMap() {
   return operationsGetAdminLiveMap();
+}
+
+export function adminGetMaintenanceSettings() {
+  return systemSettingsGetMaintenanceSettings();
+}
+
+export function adminUpdateMaintenanceSettings(
+  input: SystemMaintenanceSettingsBody,
+  actorUserId?: string,
+) {
+  return systemSettingsUpdateMaintenanceSettings(input, actorUserId);
 }

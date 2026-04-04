@@ -725,7 +725,7 @@ async function ensureUniquePlateNumber(
   }
 }
 
-async function writeActivityLog(input: {
+export async function writeActivityLog(input: {
   action: string;
   description: string;
   metadata?: Record<string, unknown>;
@@ -751,7 +751,7 @@ async function writeActivityLog(input: {
   });
 }
 
-async function notifyAdminsAndStaff(input: {
+export async function notifyAdminsAndStaff(input: {
   entity_id?: string;
   entity_type?: string;
   message: string;

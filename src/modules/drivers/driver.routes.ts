@@ -8,6 +8,7 @@ import {
   driverGetAllDrivers,
   driverGetAssignedTrips,
   driverGetDashboardSummary,
+  driverTrackingSettings,
   driverGetSchedulableRoutes,
   driverGetTripById,
   driverGetTripHistory,
@@ -37,6 +38,7 @@ router.delete("/:driverId", authenticateRequest, authorizeRoles("admin", "staff"
 
 router.use(authenticateRequest, authorizeRoles("driver"));
 router.get("/dashboard", driverGetDashboardSummary);
+router.get("/tracking-settings", driverTrackingSettings);
 router.get("/routes", driverGetSchedulableRoutes);
 router.get("/trips/active", driverGetAssignedTrips);
 router.get("/trips/history", driverGetTripHistory);

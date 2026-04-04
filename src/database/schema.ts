@@ -167,9 +167,14 @@ export const vehicleLocations = pgTable("vehicle_locations", {
   latitude: doublePrecision("latitude"),
   longitude: doublePrecision("longitude"),
   currentStopId: uuid("current_stop_id").references(() => stops.id, { onDelete: "set null" }),
+  isOffRoute: boolean("is_off_route").notNull().default(false),
+  offRouteDistanceMeters: integer("off_route_distance_meters"),
+  offRouteDetectedAt: timestamp("off_route_detected_at", { withTimezone: true }),
+  lastOffRouteAlertAt: timestamp("last_off_route_alert_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().$onUpdateFn(() => new Date()).notNull(),
 }, (table) => ({
   vehicleLocationsStopIndex: index("vehicle_locations_current_stop_id_idx").on(table.currentStopId),
+  vehicleLocationsOffRouteIndex: index("vehicle_locations_is_off_route_idx").on(table.isOffRoute),
 }));
 
 export const gpsLogs = pgTable("gps_logs", {
@@ -254,6 +259,17 @@ export const appFeedback = pgTable("app_feedback", {
   appFeedbackUserIndex: index("app_feedback_user_id_idx").on(table.userId),
 }));
 
+export const systemSettings = pgTable("system_settings", {
+  id: text("id").primaryKey(),
+  driverTrackingIntervalSeconds: integer("driver_tracking_interval_seconds").notNull().default(10),
+  driverTrackingDistanceMeters: integer("driver_tracking_distance_meters").notNull().default(15),
+  offRouteThresholdMeters: integer("off_route_threshold_meters").notNull().default(250),
+  offRouteAlertCooldownSeconds: integer("off_route_alert_cooldown_seconds").notNull().default(180),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().$onUpdateFn(() => new Date()).notNull(),
+});
+
 export const schema = {
   roles,
   users,
@@ -273,6 +289,7 @@ export const schema = {
   tripEmergencyReports,
   emailChangeRequests,
   appFeedback,
+  systemSettings,
 };
 
 export type AppRole = "admin" | "driver" | "passenger" | "staff";

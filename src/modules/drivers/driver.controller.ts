@@ -5,6 +5,7 @@ import {
   driverCreateDriver,
   driverDeleteDriver,
   driverGetDashboard,
+  driverGetTrackingSettings,
   driverListSchedulableRoutes,
   driverTrackTripLocation,
   driverGetTripDetails,
@@ -41,6 +42,14 @@ export const driverGetDashboardSummary = asyncHandler(async (
 ) => {
   const result = await driverGetDashboard(req.authUser!.userId);
   sendSuccess(res, result, "Driver dashboard loaded");
+});
+
+export const driverTrackingSettings = asyncHandler(async (
+  _req: Request,
+  res: Response,
+) => {
+  const result = await driverGetTrackingSettings();
+  sendSuccess(res, result, "Driver tracking settings loaded");
 });
 
 export const driverGetManagementTrip = asyncHandler(async (

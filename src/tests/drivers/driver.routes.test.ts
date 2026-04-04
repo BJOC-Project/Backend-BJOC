@@ -26,6 +26,17 @@ describe("driver routes", () => {
     expect(response.body.success).toBe(false);
   });
 
+  it("returns 403 when a passenger accesses driver tracking settings", async () => {
+    const passengerToken = createTestAccessToken("passenger");
+
+    const response = await request(app)
+      .get("/api/drivers/tracking-settings")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body.success).toBe(false);
+  });
+
   it("returns 400 when emergency reason text is missing for 'other'", async () => {
     const driverToken = createTestAccessToken("driver");
 

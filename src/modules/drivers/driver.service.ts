@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
+import { logger } from "../../config/logger";
 import { db } from "../../database/db";
 import {
   drivers,
@@ -16,13 +17,16 @@ import {
 import { BadRequestError, NotFoundError } from "../../errors/app-error";
 import { usersFindUserProfileById } from "../users/users.service";
 import {
+  notifyAdminsAndStaff,
   operationsCreateDriver,
   operationsDeleteDriver,
   operationsListDrivers,
   operationsReportDriverEmergency,
   operationsScheduleTrip,
   operationsUpdateDriver,
+  writeActivityLog,
 } from "../operations/operations.service";
+import { systemSettingsGetDriverTrackingSettings } from "../system-settings/system-settings.service";
 import type {
   DriverDashboardData,
   DriverDashboardTripCard,
@@ -40,11 +44,26 @@ import type {
   DriverScheduleTripBody,
   DriverUpdateBody,
 } from "./driver.validation";
+import { calculateMinimumRouteDistanceMeters } from "./driver-location.utils";
 
 const ACTIVE_PASSENGER_STATUSES = ["booked", "waiting", "onboard"] as const;
 const DASHBOARD_TIME_ZONE = "Asia/Manila";
 const ROUTE_STOP_INTERVAL_MINUTES = 5;
+const ROUTE_STOP_CACHE_TTL_MS = 60_000;
 const WEEKDAY_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+type TrackingRouteStop = {
+  id: string;
+  latitude: number | null;
+  longitude: number | null;
+  stopName: string | null;
+  stopOrder: number;
+};
+
+const routeStopCache = new Map<string, {
+  expiresAt: number;
+  stops: TrackingRouteStop[];
+}>();
 
 function formatDashboardDateKey(date: Date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -421,20 +440,38 @@ function deriveStopStatus(
   return "upcoming";
 }
 
-async function findNearestRouteStopId(
-  routeId: string,
-  latitude: number,
-  longitude: number,
-) {
+async function listTrackingRouteStops(routeId: string) {
+  const cachedRouteStops = routeStopCache.get(routeId);
+
+  if (cachedRouteStops && cachedRouteStops.expiresAt > Date.now()) {
+    return cachedRouteStops.stops;
+  }
+
   const routeStops = await db
     .select({
       id: stops.id,
       latitude: stops.latitude,
       longitude: stops.longitude,
+      stopName: stops.stopName,
+      stopOrder: stops.stopOrder,
     })
     .from(stops)
-    .where(eq(stops.routeId, routeId));
+    .where(eq(stops.routeId, routeId))
+    .orderBy(asc(stops.stopOrder));
 
+  routeStopCache.set(routeId, {
+    expiresAt: Date.now() + ROUTE_STOP_CACHE_TTL_MS,
+    stops: routeStops,
+  });
+
+  return routeStops;
+}
+
+function findNearestRouteStopId(
+  routeStops: TrackingRouteStop[],
+  latitude: number,
+  longitude: number,
+) {
   let nearestStop: {
     distanceKm: number;
     id: string;
@@ -461,6 +498,14 @@ async function findNearestRouteStopId(
   }
 
   return nearestStop?.id ?? null;
+}
+
+function buildRouteLabel(input: {
+  endLocation: string | null;
+  routeName: string | null;
+  startLocation: string | null;
+}) {
+  return buildRouteName(input.routeName, input.startLocation, input.endLocation);
 }
 
 export function driverViewProfile(userId: string) {
@@ -826,6 +871,10 @@ export function driverReportEmergency(
   return operationsReportDriverEmergency(tripId, input, userId);
 }
 
+export function driverGetTrackingSettings() {
+  return systemSettingsGetDriverTrackingSettings();
+}
+
 export async function driverTrackTripLocation(
   userId: string,
   tripId: string,
@@ -833,12 +882,18 @@ export async function driverTrackTripLocation(
 ) {
   const [tripRow] = await db
     .select({
+      endLocation: transitRoutes.endLocation,
       id: trips.id,
+      plateNumber: vehicles.plateNumber,
       routeId: trips.routeId,
+      routeName: transitRoutes.routeName,
+      startLocation: transitRoutes.startLocation,
       status: trips.status,
       vehicleId: trips.vehicleId,
     })
     .from(trips)
+    .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
     .where(
       and(
         eq(trips.id, tripId),
@@ -861,19 +916,60 @@ export async function driverTrackTripLocation(
 
   const vehicleId = tripRow.vehicleId;
   const now = new Date();
-  const currentStopId = await findNearestRouteStopId(
-    tripRow.routeId,
+  const trackingSettings = await systemSettingsGetDriverTrackingSettings();
+  const routeStops = await listTrackingRouteStops(tripRow.routeId);
+  const currentStopId = findNearestRouteStopId(
+    routeStops,
     input.latitude,
     input.longitude,
   );
+  const routeDistanceMeters = calculateMinimumRouteDistanceMeters(
+    routeStops
+      .filter((stopRow) => typeof stopRow.latitude === "number" && typeof stopRow.longitude === "number")
+      .map((stopRow) => ({
+        latitude: stopRow.latitude as number,
+        longitude: stopRow.longitude as number,
+      })),
+    {
+      latitude: input.latitude,
+      longitude: input.longitude,
+    },
+  );
+  const isOffRoute = routeDistanceMeters !== null &&
+    routeDistanceMeters > trackingSettings.off_route_threshold_meters;
+  const [existingLocationRow] = await db
+    .select({
+      lastOffRouteAlertAt: vehicleLocations.lastOffRouteAlertAt,
+      offRouteDetectedAt: vehicleLocations.offRouteDetectedAt,
+    })
+    .from(vehicleLocations)
+    .where(eq(vehicleLocations.vehicleId, vehicleId))
+    .limit(1);
+  const shouldTriggerOffRouteAlert = isOffRoute && (
+    !existingLocationRow?.lastOffRouteAlertAt ||
+    now.getTime() - existingLocationRow.lastOffRouteAlertAt.getTime() >=
+      trackingSettings.off_route_alert_cooldown_seconds * 1000
+  );
+  const routeLabel = buildRouteLabel(tripRow);
+  const roundedRouteDistanceMeters = routeDistanceMeters === null
+    ? null
+    : Math.round(routeDistanceMeters);
 
   await db.transaction(async (tx) => {
     await tx
       .insert(vehicleLocations)
       .values({
         currentStopId,
+        isOffRoute,
         latitude: input.latitude,
         longitude: input.longitude,
+        lastOffRouteAlertAt: shouldTriggerOffRouteAlert
+          ? now
+          : existingLocationRow?.lastOffRouteAlertAt ?? null,
+        offRouteDetectedAt: isOffRoute
+          ? existingLocationRow?.offRouteDetectedAt ?? now
+          : null,
+        offRouteDistanceMeters: roundedRouteDistanceMeters,
         updatedAt: now,
         vehicleId,
       })
@@ -881,8 +977,16 @@ export async function driverTrackTripLocation(
         target: vehicleLocations.vehicleId,
         set: {
           currentStopId,
+          isOffRoute,
           latitude: input.latitude,
           longitude: input.longitude,
+          lastOffRouteAlertAt: shouldTriggerOffRouteAlert
+            ? now
+            : existingLocationRow?.lastOffRouteAlertAt ?? null,
+          offRouteDetectedAt: isOffRoute
+            ? existingLocationRow?.offRouteDetectedAt ?? now
+            : null,
+          offRouteDistanceMeters: roundedRouteDistanceMeters,
           updatedAt: now,
         },
       });
@@ -910,10 +1014,56 @@ export async function driverTrackTripLocation(
       .where(eq(vehicles.id, vehicleId));
   });
 
+  if (shouldTriggerOffRouteAlert && roundedRouteDistanceMeters !== null) {
+    const alertMetadata = {
+      current_stop_id: currentStopId,
+      distance_from_route_meters: roundedRouteDistanceMeters,
+      driver_user_id: userId,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      off_route_threshold_meters: trackingSettings.off_route_threshold_meters,
+      route_id: tripRow.routeId,
+      route_name: routeLabel,
+      trip_id: tripId,
+      vehicle_id: vehicleId,
+    };
+
+    await Promise.all([
+      writeActivityLog({
+        action: "OFF_ROUTE_ALERT",
+        description: `${tripRow.plateNumber ?? "Vehicle"} drifted ${roundedRouteDistanceMeters}m away from ${routeLabel}.`,
+        metadata: alertMetadata,
+        module: "tracking",
+        performedBy: userId,
+        targetUserId: userId,
+      }),
+      notifyAdminsAndStaff({
+        entity_id: tripId,
+        entity_type: "trip",
+        message: `${tripRow.plateNumber ?? "A vehicle"} is ${roundedRouteDistanceMeters}m away from the planned route. Threshold: ${trackingSettings.off_route_threshold_meters}m.`,
+        metadata: alertMetadata,
+        severity: "warning",
+        title: "Vehicle off route",
+        type: "route",
+      }),
+    ]);
+
+    logger.warn({
+      msg: "Off-route alert triggered",
+      distanceFromRouteMeters: roundedRouteDistanceMeters,
+      routeId: tripRow.routeId,
+      tripId,
+      vehicleId,
+    });
+  }
+
   return {
+    current_distance_from_route_meters: roundedRouteDistanceMeters,
     current_stop_id: currentStopId,
+    is_off_route: isOffRoute,
     latitude: input.latitude,
     longitude: input.longitude,
+    off_route_threshold_meters: trackingSettings.off_route_threshold_meters,
     trip_id: tripId,
     updated_at: now,
     vehicle_id: vehicleId,
