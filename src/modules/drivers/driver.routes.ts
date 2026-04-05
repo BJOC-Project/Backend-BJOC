@@ -3,6 +3,7 @@ import { authenticateRequest } from "../../middleware/auth.middleware";
 import { authorizeRoles } from "../../middleware/role.middleware";
 import { validate } from "../../middleware/validation.middleware";
 import {
+  driverCancelTrip,
   driverCreate,
   driverDelete,
   driverGetAllDrivers,
@@ -43,6 +44,7 @@ router.get("/routes", driverGetSchedulableRoutes);
 router.get("/trips/active", driverGetAssignedTrips);
 router.get("/trips/history", driverGetTripHistory);
 router.post("/trips/schedule", validate({ body: driverScheduleTripBodySchema }), driverScheduleAssignedTrip);
+router.patch("/trips/:tripId/cancel", validate({ params: driverTripIdParamSchema }), driverCancelTrip);
 router.get("/trips/:tripId/management", validate({ params: driverTripIdParamSchema }), driverGetManagementTrip);
 router.get("/trips/:tripId", validate({ params: driverTripIdParamSchema }), driverGetTripById);
 router.patch("/trips/:tripId/emergency", validate({ body: driverEmergencyBodySchema, params: driverTripIdParamSchema }), driverEmergency);

@@ -82,4 +82,27 @@ describe("driver routes", () => {
     expect(response.body.success).toBe(false);
     expect(response.body.message).toBe("Validation failed");
   });
+
+  it("returns 403 when a passenger cancels a driver trip", async () => {
+    const passengerToken = createTestAccessToken("passenger");
+
+    const response = await request(app)
+      .patch("/api/drivers/trips/11111111-1111-1111-1111-111111111111/cancel")
+      .set("Authorization", `Bearer ${passengerToken}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body.success).toBe(false);
+  });
+
+  it("returns 400 when driver cancel trip id is invalid", async () => {
+    const driverToken = createTestAccessToken("driver");
+
+    const response = await request(app)
+      .patch("/api/drivers/trips/not-a-uuid/cancel")
+      .set("Authorization", `Bearer ${driverToken}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.message).toBe("Validation failed");
+  });
 });

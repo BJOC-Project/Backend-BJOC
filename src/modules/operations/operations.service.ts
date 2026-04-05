@@ -2146,14 +2146,14 @@ async function getTripForMutation(tripId: string) {
   return tripRow;
 }
 
-async function getRouteStartStop(routeId: string): Promise<{
+async function getRouteStartStops(routeId: string): Promise<Array<{
   id: string;
   latitude: number;
   longitude: number;
   stopName: string | null;
   stopOrder: number;
-}> {
-  const [startStopRow] = await db
+}>> {
+  const startStopRows = await db
     .select({
       id: stops.id,
       latitude: stops.latitude,
@@ -2168,24 +2168,27 @@ async function getRouteStartStop(routeId: string): Promise<{
         eq(stops.isActive, true),
       ),
     )
-    .orderBy(asc(stops.stopOrder))
-    .limit(1);
+    .orderBy(asc(stops.stopOrder));
 
-  if (!startStopRow) {
-    throw new BadRequestError("This route does not have a starting stop configured yet.");
+  if (startStopRows.length === 0) {
+    throw new BadRequestError("This route does not have any active stops configured yet.");
   }
 
-  if (typeof startStopRow.latitude !== "number" || typeof startStopRow.longitude !== "number") {
-    throw new BadRequestError("The route starting stop is missing coordinates. Please update the route before starting the trip.");
+  const validStartStops = startStopRows.filter((stopRow) =>
+    typeof stopRow.latitude === "number" && typeof stopRow.longitude === "number"
+  );
+
+  if (validStartStops.length === 0) {
+    throw new BadRequestError("The active route stops are missing coordinates. Please update the route before starting the trip.");
   }
 
-  return {
-    id: startStopRow.id,
-    latitude: startStopRow.latitude,
-    longitude: startStopRow.longitude,
-    stopName: startStopRow.stopName,
-    stopOrder: startStopRow.stopOrder,
-  };
+  return validStartStops.map((stopRow) => ({
+    id: stopRow.id,
+    latitude: stopRow.latitude as number,
+    longitude: stopRow.longitude as number,
+    stopName: stopRow.stopName,
+    stopOrder: stopRow.stopOrder,
+  }));
 }
 
 function buildStartStopLabel(input: {
@@ -2209,19 +2212,34 @@ async function assertDriverStartLocationIfNeeded(input: {
     throw new BadRequestError("Current driver location is required before starting a trip.");
   }
 
-  const routeStartStop = await getRouteStartStop(input.routeId);
-  const distanceKm = haversineDistanceKm(
+  const routeStartStops = await getRouteStartStops(input.routeId);
+  let routeStartStop = routeStartStops[0];
+  let distanceKm = haversineDistanceKm(
     input.latitude,
     input.longitude,
     routeStartStop.latitude,
     routeStartStop.longitude,
   );
 
+  for (const candidateStop of routeStartStops.slice(1)) {
+    const candidateDistanceKm = haversineDistanceKm(
+      input.latitude,
+      input.longitude,
+      candidateStop.latitude,
+      candidateStop.longitude,
+    );
+
+    if (candidateDistanceKm < distanceKm) {
+      routeStartStop = candidateStop;
+      distanceKm = candidateDistanceKm;
+    }
+  }
+
   if (distanceKm > DRIVER_TRIP_START_RADIUS_KM) {
     const startStopLabel = buildStartStopLabel(routeStartStop);
 
     throw new BadRequestError(
-      `You must be within 1 kilometer of ${startStopLabel} to start this trip. Current distance: ${distanceKm.toFixed(2)} km.`,
+      `You must be within 1 kilometer of an active stop on this route to start this trip. Nearest stop: ${startStopLabel}. Current distance: ${distanceKm.toFixed(2)} km.`,
       {
         allowed_radius_km: DRIVER_TRIP_START_RADIUS_KM,
         current_distance_km: Number(distanceKm.toFixed(2)),

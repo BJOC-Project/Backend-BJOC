@@ -18,6 +18,7 @@ import { BadRequestError, NotFoundError } from "../../errors/app-error";
 import { usersFindUserProfileById } from "../users/users.service";
 import {
   notifyAdminsAndStaff,
+  operationsCancelTrip,
   operationsCreateDriver,
   operationsDeleteDriver,
   operationsListDrivers,
@@ -579,6 +580,36 @@ export async function driverScheduleTrip(
     },
     userId,
   );
+}
+
+async function assertDriverOwnsTrip(
+  userId: string,
+  tripId: string,
+) {
+  const [tripRow] = await db
+    .select({
+      id: trips.id,
+    })
+    .from(trips)
+    .where(
+      and(
+        eq(trips.id, tripId),
+        eq(trips.driverUserId, userId),
+      ),
+    )
+    .limit(1);
+
+  if (!tripRow) {
+    throw new NotFoundError("Trip not found for this driver.");
+  }
+}
+
+export async function driverCancelScheduledTrip(
+  userId: string,
+  tripId: string,
+) {
+  await assertDriverOwnsTrip(userId, tripId);
+  return operationsCancelTrip(tripId, userId);
 }
 
 export async function driverGetDashboard(

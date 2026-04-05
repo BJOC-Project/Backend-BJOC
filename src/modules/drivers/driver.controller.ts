@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { asyncHandler } from "../../library/async-handler";
 import { sendSuccess } from "../../library/response";
 import {
+  driverCancelScheduledTrip,
   driverCreateDriver,
   driverDeleteDriver,
   driverGetDashboard,
@@ -84,6 +85,15 @@ export const driverScheduleAssignedTrip = asyncHandler(async (
   const body = req.body as DriverScheduleTripBody;
   const result = await driverScheduleTrip(req.authUser!.userId, body);
   sendSuccess(res, result, "Driver trip scheduled", 201);
+});
+
+export const driverCancelTrip = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const params = req.params as unknown as DriverTripIdParams;
+  const result = await driverCancelScheduledTrip(req.authUser!.userId, params.tripId);
+  sendSuccess(res, result, "Driver trip cancelled");
 });
 
 export const driverGetTripHistory = asyncHandler(async (
