@@ -16,6 +16,7 @@ import {
   driverGetTripManagement,
   driverReportEmergency,
   driverScheduleTrip,
+  driverSyncPassengerOccupancy,
   driverUpdateDriver,
   driverViewProfile,
 } from "./driver.service";
@@ -24,6 +25,7 @@ import type {
   DriverEmergencyBody,
   DriverIdParams,
   DriverLocationBody,
+  DriverPassengerOccupancyBody,
   DriverScheduleTripBody,
   DriverTripIdParams,
   DriverUpdateBody,
@@ -131,6 +133,16 @@ export const driverUpdateLocation = asyncHandler(async (
   const params = req.params as unknown as DriverTripIdParams;
   const result = await driverTrackTripLocation(req.authUser!.userId, params.tripId, body);
   sendSuccess(res, result, "Driver location updated");
+});
+
+export const driverUpdatePassengerOccupancy = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as DriverPassengerOccupancyBody;
+  const params = req.params as unknown as DriverTripIdParams;
+  const result = await driverSyncPassengerOccupancy(req.authUser!.userId, params.tripId, body);
+  sendSuccess(res, result, "Driver passenger occupancy updated");
 });
 
 export const driverGetAllDrivers = asyncHandler(async (

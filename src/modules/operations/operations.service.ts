@@ -30,6 +30,11 @@ import {
 } from "../../database/schema";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../../errors/app-error";
 import { hashPassword } from "../../library/bcrypt";
+import {
+  finalizeCancelledTripPassengers,
+  finalizeCompletedTripPassengers,
+  syncTripPassengerLifecycle,
+} from "../trips/passenger-lifecycle.service";
 
 const DASHBOARD_TIME_ZONE = "Asia/Manila";
 const NOTIFICATION_ROLE_TARGETS = ["admin", "staff"] as const;
@@ -2370,6 +2375,11 @@ export async function operationsStartTrip(
         vehicleId: tripRow.vehicleId,
       });
     }
+
+    await syncTripPassengerLifecycle(tx, {
+      currentStopId: startLocationCheck?.routeStartStop.id ?? null,
+      tripId,
+    });
   });
 
   await writeActivityLog({
@@ -2437,13 +2447,20 @@ export async function operationsEndTrip(
   });
 
   const now = new Date();
+  let resolvedPassengerCount = Math.max(0, input.passenger_count);
 
   await db.transaction(async (tx) => {
+    const resolvedPassengerState = await finalizeCompletedTripPassengers(tx, {
+      totalPassengerCount: input.passenger_count,
+      tripId,
+    });
+    resolvedPassengerCount = resolvedPassengerState.resolvedPassengerCount;
+
     await tx
       .update(trips)
       .set({
         endTime: now,
-        recordedPassengerCount: input.passenger_count,
+        recordedPassengerCount: resolvedPassengerCount,
         status: "completed",
       })
       .where(eq(trips.id, tripId));
@@ -2466,20 +2483,6 @@ export async function operationsEndTrip(
         })
         .where(eq(drivers.userId, tripRow.driverUserId));
     }
-
-    await tx
-      .update(passengerTrips)
-      .set({
-        status: "completed",
-      })
-      .where(
-        and(
-          eq(passengerTrips.tripId, tripId),
-          inArray(passengerTrips.status, [
-            ...ACTIVE_PASSENGER_STATUSES,
-          ]),
-        ),
-      );
   });
 
   await writeActivityLog({
@@ -2488,7 +2491,7 @@ export async function operationsEndTrip(
     metadata: {
       client_action_id: input.client_action_id ?? null,
       next_state: "completed",
-      passenger_count: input.passenger_count,
+      passenger_count: resolvedPassengerCount,
       previous_state: tripRow.status,
       trip_id: tripId,
     },
@@ -2502,7 +2505,7 @@ export async function operationsEndTrip(
     entity_type: "trip",
     message: `Trip ${tripId} was completed successfully.`,
     metadata: {
-      passenger_count: input.passenger_count,
+      passenger_count: resolvedPassengerCount,
       trip_id: tripId,
     },
     severity: "success",
@@ -2514,6 +2517,7 @@ export async function operationsEndTrip(
     msg: "Trip ended",
     actorUserId,
     driverUserId: tripRow.driverUserId,
+    passengerCount: resolvedPassengerCount,
     tripId,
     vehicleId: tripRow.vehicleId,
   });
@@ -2558,8 +2562,15 @@ export async function operationsReportDriverEmergency(
   }
 
   const now = new Date();
+  let resolvedPassengerCount = Math.max(0, input.passenger_count);
 
   await db.transaction(async (tx) => {
+    const resolvedPassengerState = await finalizeCancelledTripPassengers(tx, {
+      currentPassengerCount: input.passenger_count,
+      tripId,
+    });
+    resolvedPassengerCount = resolvedPassengerState.resolvedPassengerCount;
+
     await tx
       .insert(tripEmergencyReports)
       .values({
@@ -2568,7 +2579,7 @@ export async function operationsReportDriverEmergency(
         reasonText: input.reason_text?.trim() || null,
         reasonType: input.reason_type,
         reportedAt: now,
-        reportedPassengerCount: input.passenger_count,
+        reportedPassengerCount: resolvedPassengerCount,
         tripId,
       });
 
@@ -2576,7 +2587,7 @@ export async function operationsReportDriverEmergency(
       .update(trips)
       .set({
         endTime: now,
-        recordedPassengerCount: input.passenger_count,
+        recordedPassengerCount: resolvedPassengerCount,
         status: "cancelled",
       })
       .where(eq(trips.id, tripId));
@@ -2599,20 +2610,6 @@ export async function operationsReportDriverEmergency(
         })
         .where(eq(drivers.userId, tripRow.driverUserId));
     }
-
-    await tx
-      .update(passengerTrips)
-      .set({
-        status: "cancelled",
-      })
-      .where(
-        and(
-          eq(passengerTrips.tripId, tripId),
-          inArray(passengerTrips.status, [
-            ...ACTIVE_PASSENGER_STATUSES,
-          ]),
-        ),
-      );
   });
 
   await writeActivityLog({
@@ -2623,7 +2620,7 @@ export async function operationsReportDriverEmergency(
       emergency_reason_text: input.reason_text?.trim() || null,
       emergency_reason_type: input.reason_type,
       next_state: "cancelled",
-      passenger_count: input.passenger_count,
+      passenger_count: resolvedPassengerCount,
       previous_state: tripRow.status,
       trip_id: tripId,
     },
@@ -2639,7 +2636,7 @@ export async function operationsReportDriverEmergency(
     metadata: {
       emergency_reason_text: input.reason_text?.trim() || null,
       emergency_reason_type: input.reason_type,
-      passenger_count: input.passenger_count,
+      passenger_count: resolvedPassengerCount,
       trip_id: tripId,
     },
     severity: "critical",
@@ -2650,7 +2647,7 @@ export async function operationsReportDriverEmergency(
   logger.warn({
     msg: "Driver emergency reported",
     actorUserId,
-    passengerCount: input.passenger_count,
+    passengerCount: resolvedPassengerCount,
     reasonType: input.reason_type,
     tripId,
     vehicleId: tripRow.vehicleId,

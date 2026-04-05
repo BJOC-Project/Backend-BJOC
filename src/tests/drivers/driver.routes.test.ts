@@ -105,4 +105,19 @@ describe("driver routes", () => {
     expect(response.body.success).toBe(false);
     expect(response.body.message).toBe("Validation failed");
   });
+
+  it("returns 400 when occupied seats are negative", async () => {
+    const driverToken = createTestAccessToken("driver");
+
+    const response = await request(app)
+      .patch("/api/drivers/trips/11111111-1111-1111-1111-111111111111/passengers")
+      .set("Authorization", `Bearer ${driverToken}`)
+      .send({
+        occupied_seats: -1,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.message).toBe("Validation failed");
+  });
 });

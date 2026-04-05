@@ -28,6 +28,7 @@ import {
   writeActivityLog,
 } from "../operations/operations.service";
 import { systemSettingsGetDriverTrackingSettings } from "../system-settings/system-settings.service";
+import { syncTripPassengerLifecycle } from "../trips/passenger-lifecycle.service";
 import type {
   DriverDashboardData,
   DriverDashboardTripCard,
@@ -42,6 +43,7 @@ import type {
   DriverCreateBody,
   DriverEmergencyBody,
   DriverLocationBody,
+  DriverPassengerOccupancyBody,
   DriverScheduleTripBody,
   DriverUpdateBody,
 } from "./driver.validation";
@@ -773,7 +775,7 @@ export async function driverGetTripManagement(
       .where(
         and(
           eq(passengerTrips.tripId, tripId),
-          inArray(passengerTrips.status, [...ACTIVE_PASSENGER_STATUSES]),
+          inArray(passengerTrips.status, ["booked", "waiting"]),
         ),
       )
       .groupBy(passengerTrips.pickupStopId),
@@ -785,7 +787,7 @@ export async function driverGetTripManagement(
       .where(
         and(
           eq(passengerTrips.tripId, tripId),
-          inArray(passengerTrips.status, [...ACTIVE_PASSENGER_STATUSES]),
+          eq(passengerTrips.status, "onboard"),
         ),
       )
       .limit(1),
@@ -904,6 +906,51 @@ export function driverReportEmergency(
 
 export function driverGetTrackingSettings() {
   return systemSettingsGetDriverTrackingSettings();
+}
+
+export async function driverSyncPassengerOccupancy(
+  userId: string,
+  tripId: string,
+  input: DriverPassengerOccupancyBody,
+) {
+  const [tripRow] = await db
+    .select({
+      currentStopId: vehicleLocations.currentStopId,
+      id: trips.id,
+      status: trips.status,
+      vehicleId: trips.vehicleId,
+    })
+    .from(trips)
+    .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
+    .where(
+      and(
+        eq(trips.id, tripId),
+        eq(trips.driverUserId, userId),
+      ),
+    )
+    .limit(1);
+
+  if (!tripRow) {
+    throw new NotFoundError("Trip not found for this driver.");
+  }
+
+  if (tripRow.status !== "ongoing") {
+    throw new BadRequestError("Passenger occupancy can only be updated for ongoing trips.");
+  }
+
+  if (!tripRow.vehicleId) {
+    throw new BadRequestError("This trip does not have an assigned vehicle.");
+  }
+
+  await db.transaction(async (tx) => {
+    await syncTripPassengerLifecycle(tx, {
+      currentPassengerCount: input.occupied_seats,
+      currentStopId: tripRow.currentStopId ?? null,
+      tripId,
+    });
+  });
+
+  return driverGetTripManagement(userId, tripId);
 }
 
 export async function driverTrackTripLocation(
@@ -1043,6 +1090,11 @@ export async function driverTrackTripLocation(
         status: "on_route",
       })
       .where(eq(vehicles.id, vehicleId));
+
+    await syncTripPassengerLifecycle(tx, {
+      currentStopId,
+      tripId,
+    });
   });
 
   if (shouldTriggerOffRouteAlert && roundedRouteDistanceMeters !== null) {

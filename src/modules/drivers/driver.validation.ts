@@ -63,6 +63,10 @@ export const driverLocationBodySchema = z.object({
   longitude: z.number().min(-180).max(180),
 });
 
+export const driverPassengerOccupancyBodySchema = z.object({
+  occupied_seats: z.number().int().min(0),
+});
+
 export const driverScheduleTripBodySchema = z.object({
   route_id: z.string().uuid(),
   scheduled_departure_time: z.string().trim().min(1),
@@ -72,6 +76,7 @@ export type DriverCreateBody = z.infer<typeof driverCreateBodySchema>;
 export type DriverEmergencyBody = z.infer<typeof driverEmergencyBodySchema>;
 export type DriverIdParams = z.infer<typeof driverIdParamSchema>;
 export type DriverLocationBody = z.infer<typeof driverLocationBodySchema>;
+export type DriverPassengerOccupancyBody = z.infer<typeof driverPassengerOccupancyBodySchema>;
 export type DriverScheduleTripBody = z.infer<typeof driverScheduleTripBodySchema>;
 export type DriverTripIdParams = z.infer<typeof driverTripIdParamSchema>;
 export type DriverUpdateBody = z.infer<typeof driverUpdateBodySchema>;

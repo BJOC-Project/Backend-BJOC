@@ -18,6 +18,7 @@ import {
   driverGetProfile,
   driverScheduleAssignedTrip,
   driverUpdateLocation,
+  driverUpdatePassengerOccupancy,
   driverUpdate,
 } from "./driver.controller";
 import {
@@ -25,6 +26,7 @@ import {
   driverEmergencyBodySchema,
   driverIdParamSchema,
   driverLocationBodySchema,
+  driverPassengerOccupancyBodySchema,
   driverScheduleTripBodySchema,
   driverTripIdParamSchema,
   driverUpdateBodySchema,
@@ -49,6 +51,7 @@ router.get("/trips/:tripId/management", validate({ params: driverTripIdParamSche
 router.get("/trips/:tripId", validate({ params: driverTripIdParamSchema }), driverGetTripById);
 router.patch("/trips/:tripId/emergency", validate({ body: driverEmergencyBodySchema, params: driverTripIdParamSchema }), driverEmergency);
 router.patch("/trips/:tripId/location", validate({ body: driverLocationBodySchema, params: driverTripIdParamSchema }), driverUpdateLocation);
+router.patch("/trips/:tripId/passengers", validate({ body: driverPassengerOccupancyBodySchema, params: driverTripIdParamSchema }), driverUpdatePassengerOccupancy);
 router.get("/profile", driverGetProfile);
 
 export default router;
