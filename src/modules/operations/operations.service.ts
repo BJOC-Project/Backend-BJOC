@@ -44,7 +44,7 @@ const EARTH_RADIUS_KM = 6371;
 const AVG_ROUTE_SPEED_KPH = 18;
 const ROUTE_STOP_INTERVAL_MINUTES = 5;
 const MIN_TRIP_OCCUPANCY_MINUTES = 30;
-const DRIVER_TRIP_START_RADIUS_KM = 1;
+const DRIVER_TRIP_START_RADIUS_KM = 10;
 
 type DateFilter = "today" | "week" | "month";
 
@@ -2242,9 +2242,10 @@ async function assertDriverStartLocationIfNeeded(input: {
 
   if (distanceKm > DRIVER_TRIP_START_RADIUS_KM) {
     const startStopLabel = buildStartStopLabel(routeStartStop);
+    const radiusLabel = `${DRIVER_TRIP_START_RADIUS_KM} km`;
 
     throw new BadRequestError(
-      `You must be within 1 kilometer of an active stop on this route to start this trip. Nearest stop: ${startStopLabel}. Current distance: ${distanceKm.toFixed(2)} km.`,
+      `You must be within ${radiusLabel} of an active stop on this route to start this trip. Nearest stop: ${startStopLabel}. Current distance: ${distanceKm.toFixed(2)} km.`,
       {
         allowed_radius_km: DRIVER_TRIP_START_RADIUS_KM,
         current_distance_km: Number(distanceKm.toFixed(2)),
