@@ -5,6 +5,8 @@ import { validate } from "../../middleware/validation.middleware";
 import {
   bookRoute,
   planRoute,
+  routeGetPassengerOptions,
+  routePlanSegment,
   routeCreate,
   routeDelete,
   routeGetAll,
@@ -16,6 +18,7 @@ import {
   createRouteBodySchema,
   planRouteQuerySchema,
   routeIdParamSchema,
+  routeSegmentQuerySchema,
   updateRouteBodySchema,
 } from "./routes.validation";
 
@@ -28,7 +31,9 @@ router.delete("/:routeId", authenticateRequest, authorizeRoles("admin", "staff")
 router.post("/:routeId/publish", authenticateRequest, authorizeRoles("admin", "staff"), validate({ params: routeIdParamSchema }), routePublish);
 
 router.use(authenticateRequest, authorizeRoles("passenger"));
+router.get("/options", routeGetPassengerOptions);
 router.get("/plan", validate({ query: planRouteQuerySchema }), planRoute);
+router.get("/segment", validate({ query: routeSegmentQuerySchema }), routePlanSegment);
 router.post("/book", validate({ body: bookRouteBodySchema }), bookRoute);
 
 export default router;

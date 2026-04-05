@@ -1,7 +1,7 @@
 import { and, asc, count, eq, gte, inArray, sql } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
-import { passengerTrips, passengers, stops, transitRoutes, trips, vehicles } from "../../database/schema";
+import { passengerTrips, passengers, stops, transitRoutes, trips, vehicleLocations, vehicles } from "../../database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "../../errors/app-error";
 import {
   operationsCreateRoute,
@@ -33,8 +33,33 @@ interface StopRow {
   longitude: number | null;
   stopOrder: number;
   routeId: string;
+  routeName: string | null;
   routeStart: string | null;
   routeEnd: string | null;
+}
+
+interface ScheduledTripRow {
+  id: string;
+  scheduledDepartureTime: Date;
+  status: "scheduled";
+  tripDate: string;
+  vehicleId: string | null;
+  vehicleCode: string | null;
+  vehicleLatitude: number | null;
+  vehicleLongitude: number | null;
+  seatCapacity: number | null;
+}
+
+interface JourneyStartPreview {
+  label: string;
+  latitude: number;
+  longitude: number;
+  scheduledDepartureTime: Date | null;
+  source: "driver_location" | "first_stop";
+  stopId: string | null;
+  tripId: string | null;
+  vehicleCode: string | null;
+  vehicleId: string | null;
 }
 
 interface RouteMatch {
@@ -80,6 +105,28 @@ function buildRouteName(
   endLocation: string | null,
 ) {
   return `${startLocation ?? "Start"} -> ${endLocation ?? "End"}`;
+}
+
+function buildRouteDisplayName(
+  routeName: string | null,
+  startLocation: string | null,
+  endLocation: string | null,
+) {
+  const normalizedRouteName = routeName?.trim();
+
+  return normalizedRouteName && normalizedRouteName.length > 0
+    ? normalizedRouteName
+    : buildRouteName(startLocation, endLocation);
+}
+
+function buildStopLabel(stop: Pick<StopRow, "stopName" | "stopOrder">) {
+  return stop.stopName?.trim() || `Stop ${stop.stopOrder}`;
+}
+
+function hasStopCoordinates(
+  stop: StopRow,
+): stop is StopRow & { latitude: number; longitude: number } {
+  return typeof stop.latitude === "number" && typeof stop.longitude === "number";
 }
 
 function calculateRouteDistance(stopsInRange: StopRow[]) {
@@ -204,7 +251,8 @@ function findRouteMatch(
       bestScore = score;
       bestMatch = {
         routeId,
-        routeName: buildRouteName(
+        routeName: buildRouteDisplayName(
+          closestToOrigin.routeName,
           closestToOrigin.routeStart,
           closestToDest.routeEnd,
         ),
@@ -230,6 +278,7 @@ async function getAllActiveStops() {
       longitude: stops.longitude,
       stopOrder: stops.stopOrder,
       routeId: stops.routeId,
+      routeName: transitRoutes.routeName,
       routeStart: transitRoutes.startLocation,
       routeEnd: transitRoutes.endLocation,
     })
@@ -247,6 +296,7 @@ async function getActiveRouteStops(routeId: string) {
       longitude: stops.longitude,
       stopOrder: stops.stopOrder,
       routeId: stops.routeId,
+      routeName: transitRoutes.routeName,
       routeStart: transitRoutes.startLocation,
       routeEnd: transitRoutes.endLocation,
     })
@@ -304,15 +354,20 @@ async function resolveBookingSegment(input: BookRouteBody) {
 
   return {
     routeId: input.routeId,
-    routeName: buildRouteName(pickupStop.routeStart, dropoffStop.routeEnd),
+    routeName: buildRouteDisplayName(
+      pickupStop.routeName,
+      pickupStop.routeStart,
+      dropoffStop.routeEnd,
+    ),
     pickupStop,
     dropoffStop,
+    routeStops,
     stopsInRange,
     distanceKm: calculateRouteDistance(stopsInRange),
   };
 }
 
-async function findNextScheduledTrip(
+async function findNextScheduledTripOrNull(
   executor: DbExecutor,
   routeId: string,
 ) {
@@ -323,10 +378,14 @@ async function findNextScheduledTrip(
       tripDate: trips.tripDate,
       status: trips.status,
       vehicleId: trips.vehicleId,
+      vehicleCode: vehicles.plateNumber,
+      vehicleLatitude: vehicleLocations.latitude,
+      vehicleLongitude: vehicleLocations.longitude,
       seatCapacity: vehicles.capacity,
     })
     .from(trips)
     .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+    .leftJoin(vehicleLocations, eq(trips.vehicleId, vehicleLocations.vehicleId))
     .where(
       and(
         eq(trips.routeId, routeId),
@@ -337,11 +396,134 @@ async function findNextScheduledTrip(
     .orderBy(asc(trips.scheduledDepartureTime))
     .limit(1);
 
+  return (scheduledTrip ?? null) as ScheduledTripRow | null;
+}
+
+async function findNextScheduledTrip(
+  executor: DbExecutor,
+  routeId: string,
+) {
+  const scheduledTrip = await findNextScheduledTripOrNull(executor, routeId);
+
   if (!scheduledTrip) {
     throw new NotFoundError("No upcoming scheduled trip is available for this route.");
   }
 
   return scheduledTrip;
+}
+
+async function getNextScheduledTripsForRoutes(routeIds: string[]) {
+  if (routeIds.length === 0) {
+    return new Map<string, ScheduledTripRow>();
+  }
+
+  const scheduledTripRows = await db
+    .select({
+      routeId: trips.routeId,
+      id: trips.id,
+      scheduledDepartureTime: trips.scheduledDepartureTime,
+      tripDate: trips.tripDate,
+      status: trips.status,
+      vehicleId: trips.vehicleId,
+      vehicleCode: vehicles.plateNumber,
+      vehicleLatitude: vehicleLocations.latitude,
+      vehicleLongitude: vehicleLocations.longitude,
+      seatCapacity: vehicles.capacity,
+    })
+    .from(trips)
+    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+    .leftJoin(vehicleLocations, eq(trips.vehicleId, vehicleLocations.vehicleId))
+    .where(
+      and(
+        inArray(trips.routeId, routeIds),
+        eq(trips.status, "scheduled"),
+        gte(trips.scheduledDepartureTime, new Date()),
+      ),
+    )
+    .orderBy(asc(trips.routeId), asc(trips.scheduledDepartureTime));
+
+  const nextTripByRouteId = new Map<string, ScheduledTripRow>();
+
+  for (const scheduledTripRow of scheduledTripRows) {
+    if (!nextTripByRouteId.has(scheduledTripRow.routeId)) {
+      nextTripByRouteId.set(scheduledTripRow.routeId, scheduledTripRow as ScheduledTripRow);
+    }
+  }
+
+  return nextTripByRouteId;
+}
+
+function buildJourneyStart(
+  routeStops: StopRow[],
+  nextScheduledTrip: ScheduledTripRow | null,
+) {
+  if (
+    nextScheduledTrip &&
+    typeof nextScheduledTrip.vehicleLatitude === "number" &&
+    typeof nextScheduledTrip.vehicleLongitude === "number"
+  ) {
+    return {
+      label: nextScheduledTrip.vehicleCode?.trim() || "Assigned driver start location",
+      latitude: nextScheduledTrip.vehicleLatitude,
+      longitude: nextScheduledTrip.vehicleLongitude,
+      scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
+      source: "driver_location" as const,
+      stopId: null,
+      tripId: nextScheduledTrip.id,
+      vehicleCode: nextScheduledTrip.vehicleCode,
+      vehicleId: nextScheduledTrip.vehicleId,
+    };
+  }
+
+  const firstMappableStop = routeStops.find(hasStopCoordinates);
+
+  if (!firstMappableStop) {
+    throw new BadRequestError("This route does not have enough stop coordinates to generate a passenger route preview.");
+  }
+
+  return {
+    label: buildStopLabel(firstMappableStop),
+    latitude: firstMappableStop.latitude,
+    longitude: firstMappableStop.longitude,
+    scheduledDepartureTime: nextScheduledTrip?.scheduledDepartureTime ?? null,
+    source: "first_stop" as const,
+    stopId: firstMappableStop.stopId,
+    tripId: nextScheduledTrip?.id ?? null,
+    vehicleCode: nextScheduledTrip?.vehicleCode ?? null,
+    vehicleId: nextScheduledTrip?.vehicleId ?? null,
+  };
+}
+
+function buildPlannerPolyline(
+  routeStops: StopRow[],
+  dropoffStopOrder: number,
+  journeyStart: JourneyStartPreview,
+) {
+  const routePreviewPolyline = buildPolyline(
+    routeStops.filter((stop) => stop.stopOrder <= dropoffStopOrder),
+  );
+
+  if (journeyStart.source !== "driver_location") {
+    return routePreviewPolyline;
+  }
+
+  const firstCoordinate = routePreviewPolyline[0];
+
+  if (
+    firstCoordinate &&
+    Math.abs(firstCoordinate.latitude - journeyStart.latitude) < 0.000001 &&
+    Math.abs(firstCoordinate.longitude - journeyStart.longitude) < 0.000001
+  ) {
+    return routePreviewPolyline;
+  }
+
+  return [
+    {
+      latitude: journeyStart.latitude,
+      longitude: journeyStart.longitude,
+    },
+    ...routePreviewPolyline,
+  ];
 }
 
 async function ensureNoActiveDuplicateBooking(
@@ -484,6 +666,148 @@ export async function findBestRoute(input: PlanRouteQuery) {
     originWalkKm: Math.round(bestMatch.originWalkKm * 10) / 10,
     destWalkKm: Math.round(bestMatch.destWalkKm * 10) / 10,
     polyline: buildPolyline(bestMatch.stopsInRange),
+  };
+}
+
+export async function listPassengerRouteOptions() {
+  const allStops = await getAllActiveStops();
+  const routeGroups = groupStopsByRoute(allStops);
+  const nextTripsByRouteId = await getNextScheduledTripsForRoutes([...routeGroups.keys()]);
+
+  const routeOptions = [...routeGroups.entries()]
+    .map(([
+      routeId,
+      routeStops,
+    ]) => {
+      const sortedStops = [...routeStops].sort((left, right) => left.stopOrder - right.stopOrder);
+      const mappableStops = sortedStops.filter(hasStopCoordinates);
+
+      if (sortedStops.length < 2 || mappableStops.length < 2) {
+        return null;
+      }
+
+      const firstStop = sortedStops[0];
+      const lastStop = sortedStops[sortedStops.length - 1];
+      const nextScheduledTrip = nextTripsByRouteId.get(routeId) ?? null;
+      const journeyStart = buildJourneyStart(sortedStops, nextScheduledTrip);
+
+      return {
+        id: routeId,
+        name: buildRouteDisplayName(
+          firstStop?.routeName ?? null,
+          firstStop?.routeStart ?? null,
+          lastStop?.routeEnd ?? null,
+        ),
+        startLocation: firstStop?.routeStart ?? null,
+        endLocation: lastStop?.routeEnd ?? null,
+        bookingAvailable: Boolean(nextScheduledTrip),
+        defaultPickupStopId: firstStop?.stopId ?? null,
+        defaultDropoffStopId: lastStop?.stopId ?? null,
+        journeyStart: {
+          label: journeyStart.label,
+          latitude: journeyStart.latitude,
+          longitude: journeyStart.longitude,
+          scheduledDepartureTime: journeyStart.scheduledDepartureTime,
+          source: journeyStart.source,
+          stopId: journeyStart.stopId,
+          tripId: journeyStart.tripId,
+          vehicleCode: journeyStart.vehicleCode,
+          vehicleId: journeyStart.vehicleId,
+        },
+        nextTrip: nextScheduledTrip
+          ? {
+              id: nextScheduledTrip.id,
+              scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
+              status: nextScheduledTrip.status,
+              tripDate: nextScheduledTrip.tripDate,
+              vehicleCode: nextScheduledTrip.vehicleCode,
+              vehicleId: nextScheduledTrip.vehicleId,
+            }
+          : null,
+        stops: sortedStops.map((stop) => ({
+          id: stop.stopId,
+          name: stop.stopName,
+          latitude: stop.latitude,
+          longitude: stop.longitude,
+          stopOrder: stop.stopOrder,
+        })),
+        polyline: buildPolyline(sortedStops),
+      };
+    })
+    .filter((routeOption): routeOption is NonNullable<typeof routeOption> => routeOption !== null);
+
+  logger.info({
+    msg: "Passenger route options loaded",
+    count: routeOptions.length,
+  });
+
+  return routeOptions;
+}
+
+export async function planRouteSegmentForPassenger(input: BookRouteBody) {
+  const bookingSegment = await resolveBookingSegment(input);
+  const nextScheduledTrip = await findNextScheduledTripOrNull(db, input.routeId);
+  const fare = calculateFare(bookingSegment.distanceKm);
+  const etaMinutes = calculateEtaMinutes(bookingSegment.distanceKm);
+  const journeyStart = buildJourneyStart(bookingSegment.routeStops, nextScheduledTrip);
+
+  logger.info({
+    msg: "Passenger stop-based route plan generated",
+    routeId: bookingSegment.routeId,
+    pickupStopId: bookingSegment.pickupStop.stopId,
+    dropoffStopId: bookingSegment.dropoffStop.stopId,
+    tripId: nextScheduledTrip?.id ?? null,
+  });
+
+  return {
+    matchFound: true,
+    route: {
+      id: bookingSegment.routeId,
+      name: bookingSegment.routeName,
+    },
+    trip: nextScheduledTrip
+      ? {
+          id: nextScheduledTrip.id,
+          scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
+          status: nextScheduledTrip.status,
+          tripDate: nextScheduledTrip.tripDate,
+          vehicleCode: nextScheduledTrip.vehicleCode,
+          vehicleId: nextScheduledTrip.vehicleId,
+        }
+      : null,
+    journeyStart: {
+      label: journeyStart.label,
+      latitude: journeyStart.latitude,
+      longitude: journeyStart.longitude,
+      scheduledDepartureTime: journeyStart.scheduledDepartureTime,
+      source: journeyStart.source,
+      stopId: journeyStart.stopId,
+      tripId: journeyStart.tripId,
+      vehicleCode: journeyStart.vehicleCode,
+      vehicleId: journeyStart.vehicleId,
+    },
+    boardingStop: {
+      id: bookingSegment.pickupStop.stopId,
+      name: bookingSegment.pickupStop.stopName,
+      latitude: bookingSegment.pickupStop.latitude,
+      longitude: bookingSegment.pickupStop.longitude,
+      stopOrder: bookingSegment.pickupStop.stopOrder,
+    },
+    dropoffStop: {
+      id: bookingSegment.dropoffStop.stopId,
+      name: bookingSegment.dropoffStop.stopName,
+      latitude: bookingSegment.dropoffStop.latitude,
+      longitude: bookingSegment.dropoffStop.longitude,
+      stopOrder: bookingSegment.dropoffStop.stopOrder,
+    },
+    distanceKm: Math.round(bookingSegment.distanceKm * 10) / 10,
+    etaMinutes,
+    fare,
+    polyline: buildPlannerPolyline(
+      bookingSegment.routeStops,
+      bookingSegment.dropoffStop.stopOrder,
+      journeyStart,
+    ),
   };
 }
 

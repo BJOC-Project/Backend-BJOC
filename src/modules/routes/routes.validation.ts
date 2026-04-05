@@ -7,6 +7,12 @@ export const planRouteQuerySchema = z.object({
   destLng: z.coerce.number().min(-180).max(180),
 });
 
+export const routeSegmentQuerySchema = z.object({
+  routeId: z.string().uuid(),
+  pickupStopId: z.string().uuid(),
+  dropoffStopId: z.string().uuid(),
+});
+
 export const bookRouteBodySchema = z.object({
   routeId: z.string().uuid(),
   pickupStopId: z.string().uuid(),
@@ -30,6 +36,7 @@ export const updateRouteBodySchema = z.object({
 });
 
 export type PlanRouteQuery = z.infer<typeof planRouteQuerySchema>;
+export type RouteSegmentQuery = z.infer<typeof routeSegmentQuerySchema>;
 export type BookRouteBody = z.infer<typeof bookRouteBodySchema>;
 export type CreateRouteBody = z.infer<typeof createRouteBodySchema>;
 export type RouteIdParams = z.infer<typeof routeIdParamSchema>;

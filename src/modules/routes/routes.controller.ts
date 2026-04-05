@@ -5,6 +5,8 @@ import { NotFoundError } from "../../errors/app-error";
 import {
   bookRouteForPassenger,
   findBestRoute,
+  listPassengerRouteOptions,
+  planRouteSegmentForPassenger,
   routeCreateRoute,
   routeDeleteRoute,
   routeListRoutes,
@@ -16,6 +18,7 @@ import type {
   CreateRouteBody,
   PlanRouteQuery,
   RouteIdParams,
+  RouteSegmentQuery,
   UpdateRouteBody,
 } from "./routes.validation";
 
@@ -41,6 +44,23 @@ export const bookRoute = asyncHandler(async (
   const result = await bookRouteForPassenger(req.authUser!.userId, body);
 
   sendSuccess(res, result, "Route booked successfully", 201);
+});
+
+export const routeGetPassengerOptions = asyncHandler(async (
+  _req: Request,
+  res: Response,
+) => {
+  const result = await listPassengerRouteOptions();
+  sendSuccess(res, result, "Passenger route options loaded");
+});
+
+export const routePlanSegment = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const query = req.query as unknown as RouteSegmentQuery;
+  const result = await planRouteSegmentForPassenger(query);
+  sendSuccess(res, result, "Passenger stop-based route plan generated");
 });
 
 export const routeGetAll = asyncHandler(async (
