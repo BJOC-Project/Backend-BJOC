@@ -849,7 +849,7 @@ export async function driverListActiveTrips(userId: string) {
 }
 
 export async function driverListHistoryTrips(userId: string) {
-  const tripRows = await queryDriverTrips(userId, ["completed"], "desc");
+  const tripRows = await queryDriverTrips(userId, ["completed", "cancelled"], "desc");
   const aggregates = await loadDriverTripAggregates(tripRows);
 
   return tripRows.map((row) => mapDriverMobileHistoryTrip(row, aggregates));
