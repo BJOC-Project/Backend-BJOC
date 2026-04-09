@@ -17,6 +17,7 @@ import { usersFindUserProfileById } from "../users/users.service";
 import {
   buildPassengerStopProgress,
   estimatePassengerEtaMinutes,
+  estimateRemainingRouteDistanceKm,
   haversineDistanceKm,
   resolvePassengerTrackingTarget,
   type PassengerTrackingBookingStatus,
@@ -478,12 +479,15 @@ function buildPassengerTripDetail(
     tripStatus: row.tripStatus,
   });
   const etaMinutes = estimatePassengerEtaMinutes({
+    currentLatitude: row.vehicleLocationLatitude,
+    currentLongitude: row.vehicleLocationLongitude,
     currentStopOrder,
+    routeStops,
     scheduledDepartureTime: row.scheduledDepartureTime,
     targetStopOrder: targetStop?.stopOrder ?? null,
     tripStatus: row.tripStatus,
   });
-  const distanceKm = targetStop &&
+  const directDistanceKm = targetStop &&
     typeof targetStop.latitude === "number" &&
     typeof targetStop.longitude === "number" &&
     typeof row.vehicleLocationLatitude === "number" &&
@@ -493,8 +497,16 @@ function buildPassengerTripDetail(
       row.vehicleLocationLongitude,
       targetStop.latitude,
       targetStop.longitude,
-    )
+      )
     : null;
+  const remainingRouteDistanceKm = estimateRemainingRouteDistanceKm({
+    currentLatitude: row.vehicleLocationLatitude,
+    currentLongitude: row.vehicleLocationLongitude,
+    currentStopOrder,
+    routeStops,
+    targetStopOrder: targetStop?.stopOrder ?? null,
+  });
+  const distanceKm = remainingRouteDistanceKm ?? directDistanceKm;
 
   return {
     ...summary,

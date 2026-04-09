@@ -836,17 +836,40 @@ async function setVehicleDriverAssignment(
   driverUserId: string | null,
 ) {
   await db.transaction(async (tx) => {
-    await tx
-      .delete(vehicleAssignments)
-      .where(eq(vehicleAssignments.vehicleId, vehicleId));
-
     if (!driverUserId) {
+      await tx
+        .delete(vehicleAssignments)
+        .where(eq(vehicleAssignments.vehicleId, vehicleId));
       return;
     }
 
-    await tx
-      .delete(vehicleAssignments)
-      .where(eq(vehicleAssignments.driverUserId, driverUserId));
+    const [vehicleAssignmentRow] = await tx
+      .select({
+        driverUserId: vehicleAssignments.driverUserId,
+      })
+      .from(vehicleAssignments)
+      .where(eq(vehicleAssignments.vehicleId, vehicleId))
+      .limit(1);
+
+    if (vehicleAssignmentRow && vehicleAssignmentRow.driverUserId !== driverUserId) {
+      throw new ConflictError("This vehicle is already assigned to another driver.");
+    }
+
+    const [driverAssignmentRow] = await tx
+      .select({
+        vehicleId: vehicleAssignments.vehicleId,
+      })
+      .from(vehicleAssignments)
+      .where(eq(vehicleAssignments.driverUserId, driverUserId))
+      .limit(1);
+
+    if (driverAssignmentRow && driverAssignmentRow.vehicleId !== vehicleId) {
+      throw new ConflictError("This driver is already assigned to another vehicle.");
+    }
+
+    if (vehicleAssignmentRow && driverAssignmentRow) {
+      return;
+    }
 
     await tx.insert(vehicleAssignments).values({
       driverUserId,
@@ -895,6 +918,7 @@ async function getVehicleOperationRows() {
       endLocation: transitRoutes.endLocation,
       routeName: transitRoutes.routeName,
       routeId: trips.routeId,
+      recordedPassengerCount: trips.recordedPassengerCount,
       scheduledDepartureTime: trips.scheduledDepartureTime,
       startLocation: transitRoutes.startLocation,
       startTime: trips.startTime,
@@ -933,10 +957,24 @@ async function getVehicleOperationRows() {
       )
       .groupBy(passengerTrips.tripId)
     : [];
+  const onboardPassengerCountRows = activeTripIds.length > 0
+    ? await db
+      .select({
+        onboardPassengerCount: count(passengerTrips.id),
+        tripId: passengerTrips.tripId,
+      })
+      .from(passengerTrips)
+      .where(
+        and(
+          inArray(passengerTrips.tripId, activeTripIds),
+          eq(passengerTrips.status, "onboard"),
+        ),
+      )
+      .groupBy(passengerTrips.tripId)
+    : [];
 
   const { assignmentsByVehicleId } = await getDriverAssignments();
   const assignedDriverIds = [...assignmentsByVehicleId.values()];
-
   const assignedDriverRows = assignedDriverIds.length > 0
     ? await db
       .select({
@@ -949,11 +987,16 @@ async function getVehicleOperationRows() {
     : [];
 
   const passengerCountByTripId = new Map<string, number>();
+  const onboardPassengerCountByTripId = new Map<string, number>();
   const assignedDriverById = new Map<string, { firstName: string; lastName: string }>();
   const tripRowsByVehicleId = new Map<string, typeof tripRows>();
 
   for (const row of passengerCountRows) {
     passengerCountByTripId.set(row.tripId, Number(row.passengerCount));
+  }
+
+  for (const row of onboardPassengerCountRows) {
+    onboardPassengerCountByTripId.set(row.tripId, Number(row.onboardPassengerCount));
   }
 
   for (const row of assignedDriverRows) {
@@ -988,9 +1031,15 @@ async function getVehicleOperationRows() {
       ? buildRouteName(relevantTrip.routeName, relevantTrip.startLocation, relevantTrip.endLocation)
       : null;
 
-    const tripPassengerCount = relevantTrip
-      ? passengerCountByTripId.get(relevantTrip.tripId) ?? 0
-      : 0;
+    const tripPassengerCount = !relevantTrip
+      ? 0
+      : relevantTrip.status === "ongoing"
+        ? Math.max(
+            0,
+            Number(relevantTrip.recordedPassengerCount ?? 0),
+            onboardPassengerCountByTripId.get(relevantTrip.tripId) ?? 0,
+          )
+        : passengerCountByTripId.get(relevantTrip.tripId) ?? 0;
 
     const loadPercentage = vehicleRow.capacity && vehicleRow.capacity > 0
       ? Math.round((tripPassengerCount / vehicleRow.capacity) * 100)

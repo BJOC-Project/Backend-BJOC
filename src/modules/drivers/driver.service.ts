@@ -27,6 +27,10 @@ import {
   operationsUpdateDriver,
   writeActivityLog,
 } from "../operations/operations.service";
+import {
+  estimateRemainingRouteDistanceKm,
+  estimateTravelMinutesFromDistance,
+} from "../passenger/passenger-trip-tracking.utils";
 import { systemSettingsGetDriverTrackingSettings } from "../system-settings/system-settings.service";
 import { syncTripPassengerLifecycle } from "../trips/passenger-lifecycle.service";
 import type {
@@ -711,6 +715,7 @@ export async function driverGetTripManagement(
       driverUserId: trips.driverUserId,
       id: trips.id,
       plateNumber: vehicles.plateNumber,
+      recordedPassengerCount: trips.recordedPassengerCount,
       routeId: trips.routeId,
       routeName: transitRoutes.routeName,
       scheduledDepartureTime: trips.scheduledDepartureTime,
@@ -718,6 +723,8 @@ export async function driverGetTripManagement(
       startLocation: transitRoutes.startLocation,
       startTime: trips.startTime,
       status: trips.status,
+      vehicleLatitude: vehicleLocations.latitude,
+      vehicleLongitude: vehicleLocations.longitude,
       vehicleId: trips.vehicleId,
       endLocation: transitRoutes.endLocation,
     })
@@ -760,6 +767,8 @@ export async function driverGetTripManagement(
     db
       .select({
         id: stops.id,
+        latitude: stops.latitude,
+        longitude: stops.longitude,
         stopName: stops.stopName,
         stopOrder: stops.stopOrder,
       })
@@ -820,18 +829,60 @@ export async function driverGetTripManagement(
   const nextStop = mappedStops.find((stopRow) => stopRow.status === "current")
     ?? mappedStops.find((stopRow) => stopRow.status === "upcoming")
     ?? mappedStops[mappedStops.length - 1];
+  const remainingRouteDistanceKm = nextStop
+    ? estimateRemainingRouteDistanceKm({
+        currentLatitude: tripRow.vehicleLatitude,
+        currentLongitude: tripRow.vehicleLongitude,
+        currentStopOrder,
+        routeStops,
+        targetStopOrder: nextStop.stopOrder,
+      })
+    : null;
+  const distanceToNextStopKm = nextStop &&
+    typeof tripRow.vehicleLatitude === "number" &&
+    typeof tripRow.vehicleLongitude === "number"
+    ? (() => {
+        const targetStop = routeStops.find((stopRow) => stopRow.id === nextStop.id);
 
-  const etaMinutes = nextStop
-    ? Math.max(
-        0,
-        Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000),
-      )
-    : 0;
+        if (
+          !targetStop ||
+          typeof targetStop.latitude !== "number" ||
+          typeof targetStop.longitude !== "number"
+        ) {
+          return null;
+        }
+
+        return haversineDistanceKm(
+          tripRow.vehicleLatitude,
+          tripRow.vehicleLongitude,
+          targetStop.latitude,
+          targetStop.longitude,
+        );
+      })()
+    : null;
+  const liveEtaMinutes = nextStop
+    ? estimateTravelMinutesFromDistance({
+        distanceKm: remainingRouteDistanceKm ?? distanceToNextStopKm,
+      })
+    : null;
+  const etaMinutes = typeof liveEtaMinutes === "number"
+    ? liveEtaMinutes
+    : nextStop
+      ? Math.max(
+          0,
+          Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000),
+        )
+      : 0;
+  const occupiedSeats = Math.max(
+    0,
+    Number(occupiedSeatRow?.occupiedSeats ?? 0),
+    Number(tripRow.recordedPassengerCount ?? 0),
+  );
 
   return {
     eta_minutes: etaMinutes,
     next_stop_label: nextStop?.stop_name ?? "Route complete",
-    occupied_seats: Math.max(0, Number(occupiedSeatRow?.occupiedSeats ?? 0)),
+    occupied_seats: occupiedSeats,
     route_name: buildRouteName(tripRow.routeName, tripRow.startLocation, tripRow.endLocation),
     seat_capacity: seatCapacity,
     stops: mappedStops.map(({ stopOrder: _stopOrder, ...stopRow }) => stopRow),
@@ -943,6 +994,13 @@ export async function driverSyncPassengerOccupancy(
   }
 
   await db.transaction(async (tx) => {
+    await tx
+      .update(trips)
+      .set({
+        recordedPassengerCount: input.occupied_seats,
+      })
+      .where(eq(trips.id, tripId));
+
     await syncTripPassengerLifecycle(tx, {
       currentPassengerCount: input.occupied_seats,
       currentStopId: tripRow.currentStopId ?? null,

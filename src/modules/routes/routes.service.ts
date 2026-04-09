@@ -1,7 +1,16 @@
-import { and, asc, count, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, or, sql, type InferSelectModel } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
-import { passengerTrips, passengers, stops, transitRoutes, trips, vehicleLocations, vehicles } from "../../database/schema";
+import {
+  passengerTrips,
+  passengers,
+  stops,
+  transitRoutes,
+  trips,
+  users,
+  vehicleLocations,
+  vehicles,
+} from "../../database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "../../errors/app-error";
 import {
   operationsCreateRoute,
@@ -18,13 +27,14 @@ import type {
 } from "./routes.validation";
 
 const EARTH_RADIUS_KM = 6371;
-const BASE_FARE = 13;
-const FARE_PER_KM = 1.8;
-const FREE_KM = 4;
+const BASE_FARE = 15;
+const FARE_STEP_KM = 1;
+const FARE_STEP_AMOUNT = 5;
 const AVG_SPEED_KPH = 18;
 const ACTIVE_BOOKING_STATUSES = ["booked", "waiting", "onboard"] as const;
 
 type DbExecutor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+type PassengerTripStatus = InferSelectModel<typeof passengerTrips>["status"];
 
 interface StopRow {
   stopId: string;
@@ -38,10 +48,15 @@ interface StopRow {
   routeEnd: string | null;
 }
 
-interface ScheduledTripRow {
+interface BookableTripRow {
   id: string;
+  currentStopId: string | null;
+  currentStopOrder: number | null;
+  driverFirstName: string | null;
+  driverLastName: string | null;
+  recordedPassengerCount: number | null;
   scheduledDepartureTime: Date;
-  status: "scheduled";
+  status: "scheduled" | "ongoing";
   tripDate: string;
   vehicleId: string | null;
   vehicleCode: string | null;
@@ -92,8 +107,8 @@ function haversineDistance(
 }
 
 function calculateFare(distanceKm: number) {
-  const chargeableKm = Math.max(0, distanceKm - FREE_KM);
-  return Math.round((BASE_FARE + chargeableKm * FARE_PER_KM) * 100) / 100;
+  const roundedDistanceKm = Math.max(1, Math.ceil(Math.max(0, distanceKm) / FARE_STEP_KM));
+  return BASE_FARE + Math.max(0, roundedDistanceKm - 1) * FARE_STEP_AMOUNT;
 }
 
 function calculateEtaMinutes(distanceKm: number) {
@@ -117,6 +132,18 @@ function buildRouteDisplayName(
   return normalizedRouteName && normalizedRouteName.length > 0
     ? normalizedRouteName
     : buildRouteName(startLocation, endLocation);
+}
+
+function buildDriverName(
+  firstName: string | null,
+  lastName: string | null,
+) {
+  const value = [firstName, lastName]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .trim();
+
+  return value.length > 0 ? value : null;
 }
 
 function buildStopLabel(stop: Pick<StopRow, "stopName" | "stopOrder">) {
@@ -367,63 +394,116 @@ async function resolveBookingSegment(input: BookRouteBody) {
   };
 }
 
-async function findNextScheduledTripOrNull(
-  executor: DbExecutor,
-  routeId: string,
+function isOngoingTripBookable(
+  routeStops: StopRow[],
+  trip: BookableTripRow,
+  options?: {
+    dropoffStopOrder?: number;
+    pickupStopOrder?: number;
+  },
 ) {
-  const [scheduledTrip] = await executor
-    .select({
-      id: trips.id,
-      scheduledDepartureTime: trips.scheduledDepartureTime,
-      tripDate: trips.tripDate,
-      status: trips.status,
-      vehicleId: trips.vehicleId,
-      vehicleCode: vehicles.plateNumber,
-      vehicleLatitude: vehicleLocations.latitude,
-      vehicleLongitude: vehicleLocations.longitude,
-      seatCapacity: vehicles.capacity,
-    })
-    .from(trips)
-    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
-    .leftJoin(vehicleLocations, eq(trips.vehicleId, vehicleLocations.vehicleId))
-    .where(
-      and(
-        eq(trips.routeId, routeId),
-        eq(trips.status, "scheduled"),
-        gte(trips.scheduledDepartureTime, new Date()),
-      ),
-    )
-    .orderBy(asc(trips.scheduledDepartureTime))
-    .limit(1);
-
-  return (scheduledTrip ?? null) as ScheduledTripRow | null;
-}
-
-async function findNextScheduledTrip(
-  executor: DbExecutor,
-  routeId: string,
-) {
-  const scheduledTrip = await findNextScheduledTripOrNull(executor, routeId);
-
-  if (!scheduledTrip) {
-    throw new NotFoundError("No upcoming scheduled trip is available for this route.");
+  if (trip.status !== "ongoing") {
+    return true;
   }
 
-  return scheduledTrip;
+  const lastStopOrder = routeStops[routeStops.length - 1]?.stopOrder ?? null;
+
+  if (typeof trip.currentStopOrder !== "number") {
+    return true;
+  }
+
+  if (typeof lastStopOrder === "number" && trip.currentStopOrder >= lastStopOrder) {
+    return false;
+  }
+
+  if (
+    typeof options?.dropoffStopOrder === "number" &&
+    options.dropoffStopOrder <= trip.currentStopOrder
+  ) {
+    return false;
+  }
+
+  if (
+    typeof options?.pickupStopOrder === "number" &&
+    options.pickupStopOrder < trip.currentStopOrder
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
-async function getNextScheduledTripsForRoutes(routeIds: string[]) {
+function compareBookableTrips(
+  left: BookableTripRow,
+  right: BookableTripRow,
+  pickupStopOrder?: number,
+) {
+  if (left.status !== right.status) {
+    return left.status === "ongoing" ? -1 : 1;
+  }
+
+  if (left.status === "ongoing" && right.status === "ongoing") {
+    if (typeof pickupStopOrder === "number") {
+      const leftGap = typeof left.currentStopOrder === "number"
+        ? Math.max(0, pickupStopOrder - left.currentStopOrder)
+        : Number.MAX_SAFE_INTEGER;
+      const rightGap = typeof right.currentStopOrder === "number"
+        ? Math.max(0, pickupStopOrder - right.currentStopOrder)
+        : Number.MAX_SAFE_INTEGER;
+
+      if (leftGap !== rightGap) {
+        return leftGap - rightGap;
+      }
+    }
+
+    const leftCurrentStopOrder = typeof left.currentStopOrder === "number"
+      ? left.currentStopOrder
+      : Number.MAX_SAFE_INTEGER;
+    const rightCurrentStopOrder = typeof right.currentStopOrder === "number"
+      ? right.currentStopOrder
+      : Number.MAX_SAFE_INTEGER;
+
+    if (leftCurrentStopOrder !== rightCurrentStopOrder) {
+      return leftCurrentStopOrder - rightCurrentStopOrder;
+    }
+  }
+
+  return left.scheduledDepartureTime.getTime() - right.scheduledDepartureTime.getTime();
+}
+
+function selectBookableTrip(
+  routeStops: StopRow[],
+  tripCandidates: BookableTripRow[],
+  options?: {
+    dropoffStopOrder?: number;
+    pickupStopOrder?: number;
+  },
+) {
+  return [...tripCandidates]
+    .filter((trip) => isOngoingTripBookable(routeStops, trip, options))
+    .sort((left, right) => compareBookableTrips(left, right, options?.pickupStopOrder))[0] ?? null;
+}
+
+async function loadBookableTripCandidates(
+  executor: DbExecutor,
+  routeIds: string[],
+) {
   if (routeIds.length === 0) {
-    return new Map<string, ScheduledTripRow>();
+    return [];
   }
 
-  const scheduledTripRows = await db
+  return executor
     .select({
-      routeId: trips.routeId,
+      currentStopId: vehicleLocations.currentStopId,
+      currentStopOrder: stops.stopOrder,
+      driverFirstName: users.firstName,
+      driverLastName: users.lastName,
       id: trips.id,
+      recordedPassengerCount: trips.recordedPassengerCount,
+      routeId: trips.routeId,
       scheduledDepartureTime: trips.scheduledDepartureTime,
-      tripDate: trips.tripDate,
       status: trips.status,
+      tripDate: trips.tripDate,
       vehicleId: trips.vehicleId,
       vehicleCode: vehicles.plateNumber,
       vehicleLatitude: vehicleLocations.latitude,
@@ -433,45 +513,94 @@ async function getNextScheduledTripsForRoutes(routeIds: string[]) {
     .from(trips)
     .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
     .leftJoin(vehicleLocations, eq(trips.vehicleId, vehicleLocations.vehicleId))
+    .leftJoin(stops, eq(vehicleLocations.currentStopId, stops.id))
+    .leftJoin(users, eq(trips.driverUserId, users.id))
     .where(
       and(
         inArray(trips.routeId, routeIds),
-        eq(trips.status, "scheduled"),
-        gte(trips.scheduledDepartureTime, new Date()),
+        inArray(trips.status, ["scheduled", "ongoing"]),
+        or(
+          eq(trips.status, "ongoing"),
+          and(eq(trips.status, "scheduled"), gte(trips.scheduledDepartureTime, new Date())),
+        ),
       ),
     )
-    .orderBy(asc(trips.routeId), asc(trips.scheduledDepartureTime));
+    .orderBy(asc(trips.routeId), asc(trips.scheduledDepartureTime)) as Promise<Array<BookableTripRow & {
+      routeId: string;
+    }>>;
+}
 
-  const nextTripByRouteId = new Map<string, ScheduledTripRow>();
+async function findBookableTripOrNull(
+  executor: DbExecutor,
+  input: {
+    dropoffStopOrder?: number;
+    pickupStopOrder?: number;
+    routeId: string;
+    routeStops: StopRow[];
+  },
+) {
+  const tripCandidates = await loadBookableTripCandidates(executor, [input.routeId]);
 
-  for (const scheduledTripRow of scheduledTripRows) {
-    if (!nextTripByRouteId.has(scheduledTripRow.routeId)) {
-      nextTripByRouteId.set(scheduledTripRow.routeId, scheduledTripRow as ScheduledTripRow);
+  return selectBookableTrip(
+    input.routeStops,
+    tripCandidates,
+    {
+      dropoffStopOrder: input.dropoffStopOrder,
+      pickupStopOrder: input.pickupStopOrder,
+    },
+  );
+}
+
+async function getBookableTripsForRoutes(routeGroups: Map<string, StopRow[]>) {
+  const tripCandidates = await loadBookableTripCandidates(db, [...routeGroups.keys()]);
+  const nextTripByRouteId = new Map<string, BookableTripRow>();
+
+  for (const [routeId, routeStops] of routeGroups.entries()) {
+    const sortedRouteStops = [...routeStops].sort((left, right) => left.stopOrder - right.stopOrder);
+    const selectedTrip = selectBookableTrip(
+      sortedRouteStops,
+      tripCandidates.filter((trip) => trip.routeId === routeId),
+    );
+
+    if (selectedTrip) {
+      nextTripByRouteId.set(routeId, selectedTrip);
     }
   }
 
   return nextTripByRouteId;
 }
 
+function resolveDefaultPickupStopId(
+  routeStops: StopRow[],
+  selectedTrip: BookableTripRow | null,
+) {
+  const currentStopOrder = selectedTrip?.currentStopOrder;
+  const defaultPickupStop = selectedTrip?.status === "ongoing" && typeof currentStopOrder === "number"
+    ? routeStops.find((stop) => stop.stopOrder >= currentStopOrder)
+    : routeStops[0];
+
+  return defaultPickupStop?.stopId ?? routeStops[0]?.stopId ?? null;
+}
+
 function buildJourneyStart(
   routeStops: StopRow[],
-  nextScheduledTrip: ScheduledTripRow | null,
+  nextBookableTrip: BookableTripRow | null,
 ) {
   if (
-    nextScheduledTrip &&
-    typeof nextScheduledTrip.vehicleLatitude === "number" &&
-    typeof nextScheduledTrip.vehicleLongitude === "number"
+    nextBookableTrip &&
+    typeof nextBookableTrip.vehicleLatitude === "number" &&
+    typeof nextBookableTrip.vehicleLongitude === "number"
   ) {
     return {
-      label: nextScheduledTrip.vehicleCode?.trim() || "Assigned driver start location",
-      latitude: nextScheduledTrip.vehicleLatitude,
-      longitude: nextScheduledTrip.vehicleLongitude,
-      scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
+      label: nextBookableTrip.vehicleCode?.trim() || "Assigned driver start location",
+      latitude: nextBookableTrip.vehicleLatitude,
+      longitude: nextBookableTrip.vehicleLongitude,
+      scheduledDepartureTime: nextBookableTrip.scheduledDepartureTime,
       source: "driver_location" as const,
       stopId: null,
-      tripId: nextScheduledTrip.id,
-      vehicleCode: nextScheduledTrip.vehicleCode,
-      vehicleId: nextScheduledTrip.vehicleId,
+      tripId: nextBookableTrip.id,
+      vehicleCode: nextBookableTrip.vehicleCode,
+      vehicleId: nextBookableTrip.vehicleId,
     };
   }
 
@@ -485,12 +614,12 @@ function buildJourneyStart(
     label: buildStopLabel(firstMappableStop),
     latitude: firstMappableStop.latitude,
     longitude: firstMappableStop.longitude,
-    scheduledDepartureTime: nextScheduledTrip?.scheduledDepartureTime ?? null,
+    scheduledDepartureTime: nextBookableTrip?.scheduledDepartureTime ?? null,
     source: "first_stop" as const,
     stopId: firstMappableStop.stopId,
-    tripId: nextScheduledTrip?.id ?? null,
-    vehicleCode: nextScheduledTrip?.vehicleCode ?? null,
-    vehicleId: nextScheduledTrip?.vehicleId ?? null,
+    tripId: nextBookableTrip?.id ?? null,
+    vehicleCode: nextBookableTrip?.vehicleCode ?? null,
+    vehicleId: nextBookableTrip?.vehicleId ?? null,
   };
 }
 
@@ -526,6 +655,18 @@ function buildPlannerPolyline(
   ];
 }
 
+function mapBookableTripPayload(trip: BookableTripRow) {
+  return {
+    driverName: buildDriverName(trip.driverFirstName, trip.driverLastName),
+    id: trip.id,
+    scheduledDepartureTime: trip.scheduledDepartureTime,
+    status: trip.status,
+    tripDate: trip.tripDate,
+    vehicleCode: trip.vehicleCode,
+    vehicleId: trip.vehicleId,
+  };
+}
+
 async function ensureNoActiveDuplicateBooking(
   executor: DbExecutor,
   passengerUserId: string,
@@ -552,16 +693,48 @@ async function ensureNoActiveDuplicateBooking(
   }
 }
 
-async function lockScheduledTripForBooking(
+async function lockTripForBooking(
   executor: Parameters<Parameters<typeof db.transaction>[0]>[0],
   tripId: string,
 ) {
   await executor.execute(sql`select id from trips where id = ${tripId} for update`);
 }
 
-async function assertScheduledTripHasAvailableCapacity(
+async function countTripBookingsByStatuses(
+  executor: DbExecutor,
+  tripId: string,
+  statuses: readonly PassengerTripStatus[],
+) {
+  const [bookingRow] = await executor
+    .select({
+      bookingCount: count(passengerTrips.id),
+    })
+    .from(passengerTrips)
+    .where(
+      and(
+        eq(passengerTrips.tripId, tripId),
+        inArray(passengerTrips.status, statuses),
+      ),
+    );
+
+  return Number(bookingRow?.bookingCount ?? 0);
+}
+
+function resolveSeatUsageCount(input: {
+  activeBookingCount: number;
+  onboardBookingCount: number;
+  recordedPassengerCount: number | null;
+}) {
+  const recordedPassengerCount = Math.max(0, Number(input.recordedPassengerCount ?? 0));
+  const walkInOccupancyCount = Math.max(0, recordedPassengerCount - input.onboardBookingCount);
+
+  return input.activeBookingCount + walkInOccupancyCount;
+}
+
+async function assertTripHasAvailableCapacity(
   executor: DbExecutor,
   input: {
+    recordedPassengerCount: number | null;
     seatCapacity: number | null;
     tripId: string;
     vehicleId: string | null;
@@ -569,7 +742,7 @@ async function assertScheduledTripHasAvailableCapacity(
 ) {
   if (!input.vehicleId) {
     throw new BadRequestError(
-      "The next scheduled trip for this route cannot accept bookings yet because it does not have an assigned vehicle.",
+      "This trip cannot accept bookings yet because it does not have an assigned vehicle.",
       {
         trip_id: input.tripId,
       },
@@ -578,7 +751,7 @@ async function assertScheduledTripHasAvailableCapacity(
 
   if (input.seatCapacity === null || input.seatCapacity <= 0) {
     throw new BadRequestError(
-      "The next scheduled trip for this route cannot accept bookings yet because the assigned vehicle has no valid passenger capacity.",
+      "This trip cannot accept bookings yet because the assigned vehicle has no valid passenger capacity.",
       {
         seat_capacity: input.seatCapacity,
         trip_id: input.tripId,
@@ -587,23 +760,22 @@ async function assertScheduledTripHasAvailableCapacity(
     );
   }
 
-  const [activeBookingRow] = await executor
-    .select({
-      activeBookingCount: count(passengerTrips.id),
-    })
-    .from(passengerTrips)
-    .where(
-      and(
-        eq(passengerTrips.tripId, input.tripId),
-        inArray(passengerTrips.status, ACTIVE_BOOKING_STATUSES),
-      ),
-    );
+  const [activeBookingCount, onboardBookingCount] = await Promise.all([
+    countTripBookingsByStatuses(executor, input.tripId, ACTIVE_BOOKING_STATUSES),
+    countTripBookingsByStatuses(executor, input.tripId, ["onboard"]),
+  ]);
+  const reservedSeatCount = resolveSeatUsageCount({
+    activeBookingCount,
+    onboardBookingCount,
+    recordedPassengerCount: input.recordedPassengerCount,
+  });
 
-  const activeBookingCount = Number(activeBookingRow?.activeBookingCount ?? 0);
-
-  if (activeBookingCount >= input.seatCapacity) {
-    throw new BadRequestError("No seats are currently available on the next scheduled trip for this route.", {
+  if (reservedSeatCount >= input.seatCapacity) {
+    throw new BadRequestError("No seats are currently available on this trip.", {
       active_bookings: activeBookingCount,
+      onboard_bookings: onboardBookingCount,
+      recorded_passenger_count: input.recordedPassengerCount,
+      reserved_seats: reservedSeatCount,
       seat_capacity: input.seatCapacity,
       trip_id: input.tripId,
       vehicle_id: input.vehicleId,
@@ -672,7 +844,7 @@ export async function findBestRoute(input: PlanRouteQuery) {
 export async function listPassengerRouteOptions() {
   const allStops = await getAllActiveStops();
   const routeGroups = groupStopsByRoute(allStops);
-  const nextTripsByRouteId = await getNextScheduledTripsForRoutes([...routeGroups.keys()]);
+  const nextTripsByRouteId = await getBookableTripsForRoutes(routeGroups);
 
   const routeOptions = [...routeGroups.entries()]
     .map(([
@@ -688,8 +860,8 @@ export async function listPassengerRouteOptions() {
 
       const firstStop = sortedStops[0];
       const lastStop = sortedStops[sortedStops.length - 1];
-      const nextScheduledTrip = nextTripsByRouteId.get(routeId) ?? null;
-      const journeyStart = buildJourneyStart(sortedStops, nextScheduledTrip);
+      const nextBookableTrip = nextTripsByRouteId.get(routeId) ?? null;
+      const journeyStart = buildJourneyStart(sortedStops, nextBookableTrip);
 
       return {
         id: routeId,
@@ -700,8 +872,8 @@ export async function listPassengerRouteOptions() {
         ),
         startLocation: firstStop?.routeStart ?? null,
         endLocation: lastStop?.routeEnd ?? null,
-        bookingAvailable: Boolean(nextScheduledTrip),
-        defaultPickupStopId: firstStop?.stopId ?? null,
+        bookingAvailable: Boolean(nextBookableTrip),
+        defaultPickupStopId: resolveDefaultPickupStopId(sortedStops, nextBookableTrip),
         defaultDropoffStopId: lastStop?.stopId ?? null,
         journeyStart: {
           label: journeyStart.label,
@@ -714,15 +886,8 @@ export async function listPassengerRouteOptions() {
           vehicleCode: journeyStart.vehicleCode,
           vehicleId: journeyStart.vehicleId,
         },
-        nextTrip: nextScheduledTrip
-          ? {
-              id: nextScheduledTrip.id,
-              scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
-              status: nextScheduledTrip.status,
-              tripDate: nextScheduledTrip.tripDate,
-              vehicleCode: nextScheduledTrip.vehicleCode,
-              vehicleId: nextScheduledTrip.vehicleId,
-            }
+        nextTrip: nextBookableTrip
+          ? mapBookableTripPayload(nextBookableTrip)
           : null,
         stops: sortedStops.map((stop) => ({
           id: stop.stopId,
@@ -746,17 +911,22 @@ export async function listPassengerRouteOptions() {
 
 export async function planRouteSegmentForPassenger(input: BookRouteBody) {
   const bookingSegment = await resolveBookingSegment(input);
-  const nextScheduledTrip = await findNextScheduledTripOrNull(db, input.routeId);
+  const nextBookableTrip = await findBookableTripOrNull(db, {
+    dropoffStopOrder: bookingSegment.dropoffStop.stopOrder,
+    pickupStopOrder: bookingSegment.pickupStop.stopOrder,
+    routeId: input.routeId,
+    routeStops: bookingSegment.routeStops,
+  });
   const fare = calculateFare(bookingSegment.distanceKm);
   const etaMinutes = calculateEtaMinutes(bookingSegment.distanceKm);
-  const journeyStart = buildJourneyStart(bookingSegment.routeStops, nextScheduledTrip);
+  const journeyStart = buildJourneyStart(bookingSegment.routeStops, nextBookableTrip);
 
   logger.info({
     msg: "Passenger stop-based route plan generated",
     routeId: bookingSegment.routeId,
     pickupStopId: bookingSegment.pickupStop.stopId,
     dropoffStopId: bookingSegment.dropoffStop.stopId,
-    tripId: nextScheduledTrip?.id ?? null,
+    tripId: nextBookableTrip?.id ?? null,
   });
 
   return {
@@ -765,15 +935,8 @@ export async function planRouteSegmentForPassenger(input: BookRouteBody) {
       id: bookingSegment.routeId,
       name: bookingSegment.routeName,
     },
-    trip: nextScheduledTrip
-      ? {
-          id: nextScheduledTrip.id,
-          scheduledDepartureTime: nextScheduledTrip.scheduledDepartureTime,
-          status: nextScheduledTrip.status,
-          tripDate: nextScheduledTrip.tripDate,
-          vehicleCode: nextScheduledTrip.vehicleCode,
-          vehicleId: nextScheduledTrip.vehicleId,
-        }
+    trip: nextBookableTrip
+      ? mapBookableTripPayload(nextBookableTrip)
       : null,
     journeyStart: {
       label: journeyStart.label,
@@ -821,29 +984,39 @@ export async function bookRouteForPassenger(
   const fare = calculateFare(bookingSegment.distanceKm);
   const {
     createdBooking,
-    scheduledTrip,
+    selectedTrip,
   } = await db.transaction(async (tx) => {
-    const scheduledTrip = await findNextScheduledTrip(tx, input.routeId);
+    const selectedTrip = await findBookableTripOrNull(tx, {
+      dropoffStopOrder: bookingSegment.dropoffStop.stopOrder,
+      pickupStopOrder: bookingSegment.pickupStop.stopOrder,
+      routeId: input.routeId,
+      routeStops: bookingSegment.routeStops,
+    });
 
-    await lockScheduledTripForBooking(tx, scheduledTrip.id);
+    if (!selectedTrip) {
+      throw new NotFoundError("No bookable trip is available for this route right now.");
+    }
+
+    await lockTripForBooking(tx, selectedTrip.id);
     await ensureNoActiveDuplicateBooking(
       tx,
       passengerUserId,
-      scheduledTrip.id,
+      selectedTrip.id,
       bookingSegment.pickupStop.stopId,
       bookingSegment.dropoffStop.stopId,
     );
-    await assertScheduledTripHasAvailableCapacity(tx, {
-      seatCapacity: scheduledTrip.seatCapacity,
-      tripId: scheduledTrip.id,
-      vehicleId: scheduledTrip.vehicleId,
+    await assertTripHasAvailableCapacity(tx, {
+      recordedPassengerCount: selectedTrip.recordedPassengerCount,
+      seatCapacity: selectedTrip.seatCapacity,
+      tripId: selectedTrip.id,
+      vehicleId: selectedTrip.vehicleId,
     });
 
     const [createdBooking] = await tx
       .insert(passengerTrips)
       .values({
         passengerUserId,
-        tripId: scheduledTrip.id,
+        tripId: selectedTrip.id,
         pickupStopId: bookingSegment.pickupStop.stopId,
         dropoffStopId: bookingSegment.dropoffStop.stopId,
         status: "booked",
@@ -862,14 +1035,14 @@ export async function bookRouteForPassenger(
 
     return {
       createdBooking,
-      scheduledTrip,
+      selectedTrip,
     };
   });
 
   logger.info({
     msg: "Passenger route booked",
     passengerUserId,
-    tripId: scheduledTrip.id,
+    tripId: selectedTrip.id,
     routeId: input.routeId,
     pickupStopId: bookingSegment.pickupStop.stopId,
     dropoffStopId: bookingSegment.dropoffStop.stopId,
@@ -883,10 +1056,10 @@ export async function bookRouteForPassenger(
       createdAt: createdBooking.createdAt,
     },
     trip: {
-      id: scheduledTrip.id,
-      tripDate: scheduledTrip.tripDate,
-      scheduledDepartureTime: scheduledTrip.scheduledDepartureTime,
-      status: scheduledTrip.status,
+      id: selectedTrip.id,
+      tripDate: selectedTrip.tripDate,
+      scheduledDepartureTime: selectedTrip.scheduledDepartureTime,
+      status: selectedTrip.status,
     },
     route: {
       id: bookingSegment.routeId,
