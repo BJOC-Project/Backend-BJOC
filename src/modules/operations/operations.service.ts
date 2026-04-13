@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   gte,
+  ilike,
   inArray,
   lte,
   ne,
@@ -143,7 +144,9 @@ type DriverEmergencyInput = {
 
 type ActivityLogQuery = {
   action?: string;
+  limit?: number;
   module?: string;
+  offset?: number;
   search?: string;
 };
 
@@ -2864,37 +2867,44 @@ export async function operationsRescheduleTrip(
 }
 
 export async function operationsListActivityLogs(query: ActivityLogQuery) {
-  const rows = await db
-    .select({
-      action: activityLogs.action,
-      created_at: activityLogs.createdAt,
-      description: activityLogs.description,
-      id: activityLogs.id,
-      module: activityLogs.module,
-    })
-    .from(activityLogs)
-    .where(
-      and(
-        query.module
-          ? eq(activityLogs.module, query.module)
-          : undefined,
-        query.action
-          ? eq(activityLogs.action, query.action)
-          : undefined,
-      ),
-    )
-    .orderBy(desc(activityLogs.createdAt));
+  const limit = Math.min(query.limit ?? 50, 200);
+  const offset = Math.max(query.offset ?? 0, 0);
 
-  const filteredRows = query.search
-    ? rows.filter((row) => row.description?.toLowerCase().includes(query.search!.toLowerCase()))
-    : rows;
+  const whereClause = and(
+    query.module ? eq(activityLogs.module, query.module) : undefined,
+    query.action ? eq(activityLogs.action, query.action) : undefined,
+    query.search ? ilike(activityLogs.description, `%${query.search}%`) : undefined,
+  );
+
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select({
+        action: activityLogs.action,
+        created_at: activityLogs.createdAt,
+        description: activityLogs.description,
+        id: activityLogs.id,
+        module: activityLogs.module,
+      })
+      .from(activityLogs)
+      .where(whereClause)
+      .orderBy(desc(activityLogs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ total: count(activityLogs.id) })
+      .from(activityLogs)
+      .where(whereClause),
+  ]);
+
+  const total = Number(totalRows[0]?.total ?? 0);
 
   logger.info({
     msg: "Activity logs loaded",
-    count: filteredRows.length,
+    count: rows.length,
+    total,
   });
 
-  return filteredRows;
+  return { rows, total };
 }
 
 export async function operationsListNotifications(
