@@ -1,5 +1,5 @@
 import { LRUCache } from "lru-cache";
-import { and, asc, count, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
 import {
@@ -962,36 +962,40 @@ export async function driverSyncPassengerOccupancy(
   tripId: string,
   input: DriverPassengerOccupancyBody,
 ) {
-  const [tripRow] = await db
-    .select({
-      currentStopId: vehicleLocations.currentStopId,
-      id: trips.id,
-      status: trips.status,
-      vehicleId: trips.vehicleId,
-    })
-    .from(trips)
-    .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
-    .where(
-      and(
-        eq(trips.id, tripId),
-        eq(trips.driverUserId, userId),
-      ),
-    )
-    .limit(1);
-
-  if (!tripRow) {
-    throw new NotFoundError("Trip not found for this driver.");
-  }
-
-  if (tripRow.status !== "ongoing") {
-    throw new BadRequestError("Passenger occupancy can only be updated for ongoing trips.");
-  }
-
-  if (!tripRow.vehicleId) {
-    throw new BadRequestError("This trip does not have an assigned vehicle.");
-  }
-
   await db.transaction(async (tx) => {
+    // Lock the trips row for the duration of this transaction so concurrent
+    // occupancy updates cannot interleave their read-check-write cycle.
+    await tx.execute(sql`select id from trips where id = ${tripId} for update`);
+
+    const [tripRow] = await tx
+      .select({
+        currentStopId: vehicleLocations.currentStopId,
+        id: trips.id,
+        status: trips.status,
+        vehicleId: trips.vehicleId,
+      })
+      .from(trips)
+      .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
+      .where(
+        and(
+          eq(trips.id, tripId),
+          eq(trips.driverUserId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (!tripRow) {
+      throw new NotFoundError("Trip not found for this driver.");
+    }
+
+    if (tripRow.status !== "ongoing") {
+      throw new BadRequestError("Passenger occupancy can only be updated for ongoing trips.");
+    }
+
+    if (!tripRow.vehicleId) {
+      throw new BadRequestError("This trip does not have an assigned vehicle.");
+    }
+
     await tx
       .update(trips)
       .set({
