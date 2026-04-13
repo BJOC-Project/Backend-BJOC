@@ -2079,6 +2079,50 @@ export async function operationsReorderStops(
   return operationsListStops(routeId);
 }
 
+async function operationsGetTripById(tripId: string) {
+  const [row] = await db
+    .select({
+      driverFirstName: users.firstName,
+      driverLastName: users.lastName,
+      endLocation: transitRoutes.endLocation,
+      endTime: trips.endTime,
+      id: trips.id,
+      routeName: transitRoutes.routeName,
+      routeId: trips.routeId,
+      scheduledDepartureTime: trips.scheduledDepartureTime,
+      startLocation: transitRoutes.startLocation,
+      startTime: trips.startTime,
+      status: trips.status,
+      tripDate: trips.tripDate,
+      vehicleId: trips.vehicleId,
+      vehiclePlateNumber: vehicles.plateNumber,
+    })
+    .from(trips)
+    .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+    .leftJoin(users, eq(trips.driverUserId, users.id))
+    .where(eq(trips.id, tripId))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    driver: buildFullName(row.driverFirstName, row.driverLastName) ?? "Unassigned driver",
+    end_time: row.endTime,
+    id: row.id,
+    route: buildRouteName(row.routeName, row.startLocation, row.endLocation),
+    route_id: row.routeId,
+    scheduled_departure_time: row.scheduledDepartureTime,
+    start_time: row.startTime,
+    status: row.status,
+    trip_date: row.tripDate,
+    vehicle: row.vehiclePlateNumber ?? "Unassigned vehicle",
+    vehicle_id: row.vehicleId,
+  };
+}
+
 export async function operationsListActiveTrips() {
   const rows = await mapTripRows([
     "scheduled",
@@ -2323,9 +2367,7 @@ async function findEmergencyHistoryTripByClientActionId(clientActionId: string) 
     return null;
   }
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === reportRow.tripId) ?? null;
+  return operationsGetTripById(reportRow.tripId);
 }
 
 export async function operationsStartTrip(
@@ -2572,9 +2614,7 @@ export async function operationsEndTrip(
     vehicleId: tripRow.vehicleId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsReportDriverEmergency(
@@ -2703,9 +2743,7 @@ export async function operationsReportDriverEmergency(
     vehicleId: tripRow.vehicleId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsCancelTrip(
@@ -2760,9 +2798,7 @@ export async function operationsCancelTrip(
     tripId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsRescheduleTrip(
