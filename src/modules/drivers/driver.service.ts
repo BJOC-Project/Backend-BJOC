@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { and, asc, count, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
@@ -67,10 +68,10 @@ type TrackingRouteStop = {
   stopOrder: number;
 };
 
-const routeStopCache = new Map<string, {
-  expiresAt: number;
-  stops: TrackingRouteStop[];
-}>();
+const routeStopCache = new LRUCache<string, TrackingRouteStop[]>({
+  max: 1000,
+  ttl: ROUTE_STOP_CACHE_TTL_MS,
+});
 
 function formatDashboardDateKey(date: Date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -448,10 +449,10 @@ function deriveStopStatus(
 }
 
 async function listTrackingRouteStops(routeId: string) {
-  const cachedRouteStops = routeStopCache.get(routeId);
+  const cached = routeStopCache.get(routeId);
 
-  if (cachedRouteStops && cachedRouteStops.expiresAt > Date.now()) {
-    return cachedRouteStops.stops;
+  if (cached) {
+    return cached;
   }
 
   const routeStops = await db
@@ -466,10 +467,7 @@ async function listTrackingRouteStops(routeId: string) {
     .where(eq(stops.routeId, routeId))
     .orderBy(asc(stops.stopOrder));
 
-  routeStopCache.set(routeId, {
-    expiresAt: Date.now() + ROUTE_STOP_CACHE_TTL_MS,
-    stops: routeStops,
-  });
+  routeStopCache.set(routeId, routeStops);
 
   return routeStops;
 }
