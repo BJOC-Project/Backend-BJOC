@@ -9,7 +9,7 @@ This project does not yet follow Semantic Versioning — entries are grouped by 
 
 ## [Unreleased] — Branch: `security-fixes-peter`
 
-**Session date:** April 13, 2026
+**Session date:** April 13–14, 2026
 **Author:** Peter (Joshua Jose Peter U. Bee)
 **Branch:** `security-fixes-peter`
 **Context:** Comprehensive security audit performed on `Backend-BJOC` using Claude Code static analysis. Audit identified 26 findings across CRITICAL, HIGH, MEDIUM, and LOW severities. This session resolves the surface-level issues that affect admin experience, system stability, and core security posture. Remaining findings are documented as deferred work in the paper's Scope and Limitations section.
@@ -64,6 +64,24 @@ This project does not yet follow Semantic Versioning — entries are grouped by 
 ---
 
 ### Performance
+
+#### `perf(operations): paginate activity log search and push filter into SQL` — Audit H-3
+- **Commit:** `7d2d672`
+- **Files changed:**
+  - `src/modules/operations/operations.service.ts` — `operationsListActivityLogs` refactored.
+  - `src/modules/activityLogs/activityLogs.validation.ts` — Zod schema accepts `limit` / `offset` with coercion and bounds.
+  - **NEW** `scripts/test-activity-log-pagination.ts` — Smoke test for the new response shape.
+  - **Companion commit (Web-Frontend_BJOC, branch `security-fixes-peter`, commit `733ae6d`):** `src/features/pages/Admin/services/activityLogsService.ts` — service now unwraps `.rows` from the new envelope so the existing callsite in `admin_ActivityLogsPage.tsx` continues to work without changes.
+- **Problem:** `operationsListActivityLogs` fetched all matching rows from the DB (no `LIMIT`), then filtered in-memory with `Array.filter()` for the search string. Cost grew linearly with total log volume on every admin dashboard load.
+- **Fix:** Search filter pushed into a SQL `ilike` clause inside the query. Added `limit` (default 50, max 200, clamped server-side via `Math.min`) and `offset` (default 0, floored at 0) parameters. Page query and total-count query run in parallel via `Promise.all` with a shared `whereClause` so the count reflects the filtered set. Response shape changed from a plain array to `{ rows, total }`.
+- **Caller impact:** Breaking change to response shape — handled by the companion frontend commit on the same branch. Service in `Web-Frontend_BJOC` unwraps `.rows`, so the page component (`admin_ActivityLogsPage.tsx`) needed no changes. `total` is returned but not yet consumed by the UI; pagination controls deferred.
+- **Verify:**
+  ```
+  npx tsx scripts/test-activity-log-pagination.ts <admin-password>
+  ```
+- **Index status / known limitation (documented as future work):**
+  - `activity_logs.description` has no index. `ilike '%...%'` with a leading wildcard cannot use a B-tree index anyway — a `pg_trgm` GIN index would be required for true full-text efficiency. Acceptable at current data volume; recommended as future work for high-volume production.
+  - `activity_logs.action` (used in the equality filter) also has no B-tree index. Same recommendation.
 
 #### `perf(operations): fetch single trip on end/cancel/emergency instead of full history` — Audit DB-3
 - **Commit:** `24610a0`
@@ -121,13 +139,17 @@ npm install   # picks up new helmet + lru-cache deps and patched versions
 npm run dev
 # (in another terminal)
 npx tsx scripts/test-logout.ts <admin-password>
+
+# Run the activity log pagination smoke test
+npx tsx scripts/test-activity-log-pagination.ts <admin-password>
 ```
 
 When ready to merge:
 1. Branch is already pushed to `origin/security-fixes-peter`.
-2. Open a Pull Request: <https://github.com/BJOC-Project/Backend-BJOC/pull/new/security-fixes-peter>
-3. Karl + Felix review.
-4. Merge to `main`.
+2. Companion frontend branch also pushed: `Web-Frontend_BJOC` → `security-fixes-peter` (commit `733ae6d`). Both must merge together because of the H-3 response shape change.
+3. Open a Pull Request: <https://github.com/BJOC-Project/Backend-BJOC/pull/new/security-fixes-peter>
+4. Karl + Felix review.
+5. Merge to `main`.
 
 ---
 
@@ -136,15 +158,14 @@ When ready to merge:
 | Resolved this session | Deferred (documented in paper Scope/Limitations) |
 |---|---|
 | H-1, H-2 (dependency CVEs) | C-1 credential rotation (out-of-band — Supabase password, service role key, Gmail app password, Geoapify key all in git history) |
-| H-6 (NODE_ENV leak) | C-3 (service role key used globally — bypasses RLS) |
-| L-3 (health DB ping) | C-4 (no rate limiting) |
-| M-6 (driver cache) | C-5 (OTP brute-force protection) |
-| C-2, M-2, M-1 (logout + JWT revocation + algorithm pin) | H-3 (activity log search pagination) |
-| DB-3 (trip lookup) | H-4 (profile photo validation) |
-| L-1 (helmet) | H-5 (SSL cert verification in production) |
-| M-4 (occupancy row lock) | H-7 (seed credentials) |
-| | M-3 (driver/admin route ordering) |
-| | M-5 (stack trace exposure outside production) |
+| H-3 (activity log search pagination) | C-3 (service role key used globally — bypasses RLS) |
+| H-6 (NODE_ENV leak) | C-4 (no rate limiting) |
+| L-3 (health DB ping) | C-5 (OTP brute-force protection) |
+| M-6 (driver cache) | H-4 (profile photo validation) |
+| C-2, M-2, M-1 (logout + JWT revocation + algorithm pin) | H-5 (SSL cert verification in production) |
+| DB-3 (trip lookup) | H-7 (seed credentials) |
+| L-1 (helmet) | M-3 (driver/admin route ordering) |
+| M-4 (occupancy row lock) | M-5 (stack trace exposure outside production) |
 | | L-2 (5MB JSON body limit) |
 | | L-4 (no unhandledRejection / uncaughtException handlers) |
 | | L-5 (no request timeout) |
@@ -152,8 +173,8 @@ When ready to merge:
 | | DB-1 (no RLS policies in schema) |
 | | DB-2 (operationsStartTrip / operationsEndTrip TOCTOU) |
 
-**Resolved:** 10 audit findings.
-**Deferred:** 16 audit findings, framed as production-readiness work and future research recommendations.
+**Resolved:** 11 audit findings.
+**Deferred:** 15 audit findings, framed as production-readiness work and future research recommendations.
 
 ---
 
