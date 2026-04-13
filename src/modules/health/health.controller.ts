@@ -1,10 +1,16 @@
-﻿import type { Request, Response } from "express";
+﻿import type { NextFunction, Request, Response } from "express";
 import { sendSuccess } from "../../library/response";
 import { healthGetStatus } from "./health.service";
 
-export function healthCheck(
+export async function healthCheck(
   _req: Request,
   res: Response,
+  next: NextFunction,
 ) {
-  sendSuccess(res, healthGetStatus(), "Service is healthy");
+  try {
+    const status = await healthGetStatus();
+    sendSuccess(res, status, "Service is healthy");
+  } catch (error) {
+    next(error);
+  }
 }
