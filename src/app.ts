@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type Request, type Response } from "express";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { appEnv } from "./config/env";
 import { logger } from "./config/logger";
@@ -41,6 +42,7 @@ function buildHttpLogObject(
   };
 }
 
+app.use(helmet());
 app.disable("x-powered-by");
 app.use(
   pinoHttp({
