@@ -2049,13 +2049,27 @@ export async function operationsReorderStops(
   await assertRouteExists(routeId);
 
   await db.transaction(async (tx) => {
+    // Phase 1: move all stops to temporary negative order values so that no
+    // two stops share the same stop_order during the update. PostgreSQL checks
+    // the unique (route_id, stop_order) constraint after every statement, so
+    // sequential positive-to-positive updates would violate it mid-transaction.
+    for (let i = 0; i < updates.length; i++) {
+      await tx
+        .update(stops)
+        .set({ stopOrder: -(i + 1), updatedAt: new Date() })
+        .where(
+          and(
+            eq(stops.id, updates[i].id),
+            eq(stops.routeId, routeId),
+          ),
+        );
+    }
+
+    // Phase 2: assign the final positive order values now that all slots are free.
     for (const updateRow of updates) {
       await tx
         .update(stops)
-        .set({
-          stopOrder: updateRow.stop_order,
-          updatedAt: new Date(),
-        })
+        .set({ stopOrder: updateRow.stop_order, updatedAt: new Date() })
         .where(
           and(
             eq(stops.id, updateRow.id),
@@ -2275,9 +2289,13 @@ async function getRouteStartStops(routeId: string): Promise<Array<{
     throw new BadRequestError("This route does not have any active stops configured yet.");
   }
 
-  const validStartStops = startStopRows.filter((stopRow) =>
-    typeof stopRow.latitude === "number" && typeof stopRow.longitude === "number"
-  );
+  type StopRowWithCoords = typeof startStopRows[number] & { latitude: number; longitude: number };
+
+  function hasValidCoords(row: typeof startStopRows[number]): row is StopRowWithCoords {
+    return typeof row.latitude === "number" && typeof row.longitude === "number";
+  }
+
+  const validStartStops = startStopRows.filter(hasValidCoords);
 
   if (validStartStops.length === 0) {
     throw new BadRequestError("The active route stops are missing coordinates. Please update the route before starting the trip.");
@@ -2285,8 +2303,8 @@ async function getRouteStartStops(routeId: string): Promise<Array<{
 
   return validStartStops.map((stopRow) => ({
     id: stopRow.id,
-    latitude: stopRow.latitude as number,
-    longitude: stopRow.longitude as number,
+    latitude: stopRow.latitude,
+    longitude: stopRow.longitude,
     stopName: stopRow.stopName,
     stopOrder: stopRow.stopOrder,
   }));
