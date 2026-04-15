@@ -64,6 +64,7 @@ export const driverLocationBodySchema = z.object({
 });
 
 export const driverPassengerOccupancyBodySchema = z.object({
+  boarded_passengers: z.number().int().min(0).optional(),
   occupied_seats: z.number().int().min(0),
 });
 

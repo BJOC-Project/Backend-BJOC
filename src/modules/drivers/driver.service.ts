@@ -1,4 +1,5 @@
-import { and, asc, count, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
+import { LRUCache } from "lru-cache";
+import { and, asc, count, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { logger } from "../../config/logger";
 import { db } from "../../database/db";
 import {
@@ -67,10 +68,10 @@ type TrackingRouteStop = {
   stopOrder: number;
 };
 
-const routeStopCache = new Map<string, {
-  expiresAt: number;
-  stops: TrackingRouteStop[];
-}>();
+const routeStopCache = new LRUCache<string, TrackingRouteStop[]>({
+  max: 1000,
+  ttl: ROUTE_STOP_CACHE_TTL_MS,
+});
 
 function formatDashboardDateKey(date: Date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -448,10 +449,10 @@ function deriveStopStatus(
 }
 
 async function listTrackingRouteStops(routeId: string) {
-  const cachedRouteStops = routeStopCache.get(routeId);
+  const cached = routeStopCache.get(routeId);
 
-  if (cachedRouteStops && cachedRouteStops.expiresAt > Date.now()) {
-    return cachedRouteStops.stops;
+  if (cached) {
+    return cached;
   }
 
   const routeStops = await db
@@ -466,10 +467,7 @@ async function listTrackingRouteStops(routeId: string) {
     .where(eq(stops.routeId, routeId))
     .orderBy(asc(stops.stopOrder));
 
-  routeStopCache.set(routeId, {
-    expiresAt: Date.now() + ROUTE_STOP_CACHE_TTL_MS,
-    stops: routeStops,
-  });
+  routeStopCache.set(routeId, routeStops);
 
   return routeStops;
 }
@@ -964,40 +962,47 @@ export async function driverSyncPassengerOccupancy(
   tripId: string,
   input: DriverPassengerOccupancyBody,
 ) {
-  const [tripRow] = await db
-    .select({
-      currentStopId: vehicleLocations.currentStopId,
-      id: trips.id,
-      status: trips.status,
-      vehicleId: trips.vehicleId,
-    })
-    .from(trips)
-    .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
-    .where(
-      and(
-        eq(trips.id, tripId),
-        eq(trips.driverUserId, userId),
-      ),
-    )
-    .limit(1);
-
-  if (!tripRow) {
-    throw new NotFoundError("Trip not found for this driver.");
-  }
-
-  if (tripRow.status !== "ongoing") {
-    throw new BadRequestError("Passenger occupancy can only be updated for ongoing trips.");
-  }
-
-  if (!tripRow.vehicleId) {
-    throw new BadRequestError("This trip does not have an assigned vehicle.");
-  }
-
   await db.transaction(async (tx) => {
+    // Lock the trips row for the duration of this transaction so concurrent
+    // occupancy updates cannot interleave their read-check-write cycle.
+    await tx.execute(sql`select id from trips where id = ${tripId} for update`);
+
+    const [tripRow] = await tx
+      .select({
+        currentStopId: vehicleLocations.currentStopId,
+        id: trips.id,
+        status: trips.status,
+        vehicleId: trips.vehicleId,
+      })
+      .from(trips)
+      .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
+      .where(
+        and(
+          eq(trips.id, tripId),
+          eq(trips.driverUserId, userId),
+        ),
+      )
+      .limit(1);
+
+    if (!tripRow) {
+      throw new NotFoundError("Trip not found for this driver.");
+    }
+
+    if (tripRow.status !== "ongoing") {
+      throw new BadRequestError("Passenger occupancy can only be updated for ongoing trips.");
+    }
+
+    if (!tripRow.vehicleId) {
+      throw new BadRequestError("This trip does not have an assigned vehicle.");
+    }
+
     await tx
       .update(trips)
       .set({
         recordedPassengerCount: input.occupied_seats,
+        totalBoardedPassengers: input.boarded_passengers !== undefined
+          ? sql`GREATEST(COALESCE(total_boarded_passengers, 0), ${input.boarded_passengers})`
+          : undefined,
       })
       .where(eq(trips.id, tripId));
 

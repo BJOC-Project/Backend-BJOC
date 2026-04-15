@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   gte,
+  ilike,
   inArray,
   lte,
   ne,
@@ -143,7 +144,9 @@ type DriverEmergencyInput = {
 
 type ActivityLogQuery = {
   action?: string;
+  limit?: number;
   module?: string;
+  offset?: number;
   search?: string;
 };
 
@@ -2046,13 +2049,27 @@ export async function operationsReorderStops(
   await assertRouteExists(routeId);
 
   await db.transaction(async (tx) => {
+    // Phase 1: move all stops to temporary negative order values so that no
+    // two stops share the same stop_order during the update. PostgreSQL checks
+    // the unique (route_id, stop_order) constraint after every statement, so
+    // sequential positive-to-positive updates would violate it mid-transaction.
+    for (let i = 0; i < updates.length; i++) {
+      await tx
+        .update(stops)
+        .set({ stopOrder: -(i + 1), updatedAt: new Date() })
+        .where(
+          and(
+            eq(stops.id, updates[i].id),
+            eq(stops.routeId, routeId),
+          ),
+        );
+    }
+
+    // Phase 2: assign the final positive order values now that all slots are free.
     for (const updateRow of updates) {
       await tx
         .update(stops)
-        .set({
-          stopOrder: updateRow.stop_order,
-          updatedAt: new Date(),
-        })
+        .set({ stopOrder: updateRow.stop_order, updatedAt: new Date() })
         .where(
           and(
             eq(stops.id, updateRow.id),
@@ -2077,6 +2094,50 @@ export async function operationsReorderStops(
   });
 
   return operationsListStops(routeId);
+}
+
+async function operationsGetTripById(tripId: string) {
+  const [row] = await db
+    .select({
+      driverFirstName: users.firstName,
+      driverLastName: users.lastName,
+      endLocation: transitRoutes.endLocation,
+      endTime: trips.endTime,
+      id: trips.id,
+      routeName: transitRoutes.routeName,
+      routeId: trips.routeId,
+      scheduledDepartureTime: trips.scheduledDepartureTime,
+      startLocation: transitRoutes.startLocation,
+      startTime: trips.startTime,
+      status: trips.status,
+      tripDate: trips.tripDate,
+      vehicleId: trips.vehicleId,
+      vehiclePlateNumber: vehicles.plateNumber,
+    })
+    .from(trips)
+    .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+    .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+    .leftJoin(users, eq(trips.driverUserId, users.id))
+    .where(eq(trips.id, tripId))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    driver: buildFullName(row.driverFirstName, row.driverLastName) ?? "Unassigned driver",
+    end_time: row.endTime,
+    id: row.id,
+    route: buildRouteName(row.routeName, row.startLocation, row.endLocation),
+    route_id: row.routeId,
+    scheduled_departure_time: row.scheduledDepartureTime,
+    start_time: row.startTime,
+    status: row.status,
+    trip_date: row.tripDate,
+    vehicle: row.vehiclePlateNumber ?? "Unassigned vehicle",
+    vehicle_id: row.vehicleId,
+  };
 }
 
 export async function operationsListActiveTrips() {
@@ -2228,9 +2289,13 @@ async function getRouteStartStops(routeId: string): Promise<Array<{
     throw new BadRequestError("This route does not have any active stops configured yet.");
   }
 
-  const validStartStops = startStopRows.filter((stopRow) =>
-    typeof stopRow.latitude === "number" && typeof stopRow.longitude === "number"
-  );
+  type StopRowWithCoords = typeof startStopRows[number] & { latitude: number; longitude: number };
+
+  function hasValidCoords(row: typeof startStopRows[number]): row is StopRowWithCoords {
+    return typeof row.latitude === "number" && typeof row.longitude === "number";
+  }
+
+  const validStartStops = startStopRows.filter(hasValidCoords);
 
   if (validStartStops.length === 0) {
     throw new BadRequestError("The active route stops are missing coordinates. Please update the route before starting the trip.");
@@ -2238,8 +2303,8 @@ async function getRouteStartStops(routeId: string): Promise<Array<{
 
   return validStartStops.map((stopRow) => ({
     id: stopRow.id,
-    latitude: stopRow.latitude as number,
-    longitude: stopRow.longitude as number,
+    latitude: stopRow.latitude,
+    longitude: stopRow.longitude,
     stopName: stopRow.stopName,
     stopOrder: stopRow.stopOrder,
   }));
@@ -2323,9 +2388,7 @@ async function findEmergencyHistoryTripByClientActionId(clientActionId: string) 
     return null;
   }
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === reportRow.tripId) ?? null;
+  return operationsGetTripById(reportRow.tripId);
 }
 
 export async function operationsStartTrip(
@@ -2572,9 +2635,7 @@ export async function operationsEndTrip(
     vehicleId: tripRow.vehicleId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsReportDriverEmergency(
@@ -2703,9 +2764,7 @@ export async function operationsReportDriverEmergency(
     vehicleId: tripRow.vehicleId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsCancelTrip(
@@ -2760,9 +2819,7 @@ export async function operationsCancelTrip(
     tripId,
   });
 
-  const historyTrips = await operationsListTripHistory();
-
-  return historyTrips.find((tripRowItem) => tripRowItem.id === tripId) ?? null;
+  return operationsGetTripById(tripId);
 }
 
 export async function operationsRescheduleTrip(
@@ -2828,37 +2885,44 @@ export async function operationsRescheduleTrip(
 }
 
 export async function operationsListActivityLogs(query: ActivityLogQuery) {
-  const rows = await db
-    .select({
-      action: activityLogs.action,
-      created_at: activityLogs.createdAt,
-      description: activityLogs.description,
-      id: activityLogs.id,
-      module: activityLogs.module,
-    })
-    .from(activityLogs)
-    .where(
-      and(
-        query.module
-          ? eq(activityLogs.module, query.module)
-          : undefined,
-        query.action
-          ? eq(activityLogs.action, query.action)
-          : undefined,
-      ),
-    )
-    .orderBy(desc(activityLogs.createdAt));
+  const limit = Math.min(query.limit ?? 50, 200);
+  const offset = Math.max(query.offset ?? 0, 0);
 
-  const filteredRows = query.search
-    ? rows.filter((row) => row.description?.toLowerCase().includes(query.search!.toLowerCase()))
-    : rows;
+  const whereClause = and(
+    query.module ? eq(activityLogs.module, query.module) : undefined,
+    query.action ? eq(activityLogs.action, query.action) : undefined,
+    query.search ? ilike(activityLogs.description, `%${query.search}%`) : undefined,
+  );
+
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select({
+        action: activityLogs.action,
+        created_at: activityLogs.createdAt,
+        description: activityLogs.description,
+        id: activityLogs.id,
+        module: activityLogs.module,
+      })
+      .from(activityLogs)
+      .where(whereClause)
+      .orderBy(desc(activityLogs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ total: count(activityLogs.id) })
+      .from(activityLogs)
+      .where(whereClause),
+  ]);
+
+  const total = Number(totalRows[0]?.total ?? 0);
 
   logger.info({
     msg: "Activity logs loaded",
-    count: filteredRows.length,
+    count: rows.length,
+    total,
   });
 
-  return filteredRows;
+  return { rows, total };
 }
 
 export async function operationsListNotifications(

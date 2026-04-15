@@ -110,7 +110,9 @@ export async function authRegisterPassenger(input: RegisterInput): Promise<AuthR
     return newUser;
   });
 
-  void sendWelcomeEmail(createdUser.email, createdUser.firstName);
+  void sendWelcomeEmail(createdUser.email, createdUser.firstName).catch((error: unknown) => {
+    console.error("[auth.service] Failed to send welcome email to", createdUser.email, error);
+  });
 
   return buildAuthResponse({
     ...createdUser,

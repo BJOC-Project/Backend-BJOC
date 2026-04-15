@@ -625,6 +625,16 @@ export async function usersDeleteUser(
   };
 }
 
+/**
+ * Known limitation — token revocation on suspension:
+ * Active JWTs held by the suspended user remain valid until they naturally
+ * expire (default 7 days). The in-memory blocklist has no per-user token
+ * registry, so we cannot enumerate and revoke existing tokens here.
+ * Mitigation: suspension is enforced on every *new* login attempt via the
+ * status check in authLogin, so the blast radius is bounded to the remaining
+ * token lifetime. To close this gap fully, add per-user token tracking
+ * (e.g. store jti→userId in Redis) and revoke all matching entries here.
+ */
 export async function usersSuspendUser(
   userId: string,
   input: SuspendUserInput,
