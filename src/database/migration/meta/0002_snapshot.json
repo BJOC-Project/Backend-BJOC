@@ -1,6 +1,6 @@
 {
-  "id": "e574cf1c-7bf6-498f-968b-214823986844",
-  "prevId": "48248cc4-2da0-4166-a5cd-d6bf54ae7fd1",
+  "id": "c57dc7e1-53fa-42dd-8f98-ad78347e3eca",
+  "prevId": "e574cf1c-7bf6-498f-968b-214823986844",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1494,6 +1494,13 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": false
+        },
+        "total_boarded_passengers": {
+          "name": "total_boarded_passengers",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
         },
         "status": {
           "name": "status",

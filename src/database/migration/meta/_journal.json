@@ -15,6 +15,13 @@
       "when": 1775310862314,
       "tag": "0001_system_settings_off_route_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776270249366,
+      "tag": "0002_smiling_puff_adder",
+      "breakpoints": true
     }
   ]
 }
