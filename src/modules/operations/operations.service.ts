@@ -1774,6 +1774,17 @@ export async function operationsDeleteRoute(
     throw new NotFoundError("Route not found.");
   }
 
+  const [tripCount] = await db
+    .select({ value: count() })
+    .from(trips)
+    .where(eq(trips.routeId, routeId));
+
+  if ((tripCount?.value ?? 0) > 0) {
+    throw new BadRequestError(
+      "Cannot delete a route that has existing trips. Remove all associated trips first or deactivate the route instead.",
+    );
+  }
+
   await db.delete(transitRoutes).where(eq(transitRoutes.id, routeId));
 
   await writeActivityLog({
