@@ -1000,6 +1000,9 @@ export async function driverSyncPassengerOccupancy(
       .update(trips)
       .set({
         recordedPassengerCount: input.occupied_seats,
+        totalBoardedPassengers: input.boarded_passengers !== undefined
+          ? sql`GREATEST(COALESCE(total_boarded_passengers, 0), ${input.boarded_passengers})`
+          : undefined,
       })
       .where(eq(trips.id, tripId));
 

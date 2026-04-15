@@ -138,6 +138,7 @@ export const trips = pgTable("trips", {
   startTime: timestamp("start_time", { withTimezone: true }),
   endTime: timestamp("end_time", { withTimezone: true }),
   recordedPassengerCount: integer("recorded_passenger_count"),
+  totalBoardedPassengers: integer("total_boarded_passengers").default(0),
   status: tripStatusEnum("status").notNull().default("scheduled"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
