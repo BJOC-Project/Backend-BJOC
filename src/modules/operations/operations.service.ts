@@ -1774,6 +1774,26 @@ export async function operationsDeleteRoute(
     throw new NotFoundError("Route not found.");
   }
 
+  const [activeTripCount] = await db
+    .select({ value: count() })
+    .from(trips)
+    .where(
+      and(
+        eq(trips.routeId, routeId),
+        inArray(trips.status, ["scheduled", "ongoing"]),
+      ),
+    );
+
+  if ((activeTripCount?.value ?? 0) > 0) {
+    throw new BadRequestError(
+      "Cannot delete a route that has active trips. Complete or cancel all trips first.",
+    );
+  }
+
+  // Remove completed/cancelled trips so the FK RESTRICT on trips.route_id
+  // doesn't block the route delete. Cascades to passenger_trips + emergency reports.
+  await db.delete(trips).where(eq(trips.routeId, routeId));
+
   await db.delete(transitRoutes).where(eq(transitRoutes.id, routeId));
 
   await writeActivityLog({

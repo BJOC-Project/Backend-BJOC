@@ -1,0 +1,1 @@
+ALTER TABLE "trips" ADD COLUMN "total_boarded_passengers" integer DEFAULT 0;
