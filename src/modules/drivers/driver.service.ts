@@ -32,6 +32,7 @@ import {
   estimateRemainingRouteDistanceKm,
   estimateTravelMinutesFromDistance,
 } from "../passenger/passenger-trip-tracking.utils";
+import { calculateEta, recordStopArrival, recordStopDeparture } from "../eta/eta.service";
 import { systemSettingsGetDriverTrackingSettings } from "../system-settings/system-settings.service";
 import { syncTripPassengerLifecycle } from "../trips/passenger-lifecycle.service";
 import type {
@@ -872,18 +873,22 @@ export async function driverGetTripManagement(
         );
       })()
     : null;
-  const liveEtaMinutes = nextStop
-    ? estimateTravelMinutesFromDistance({
-        distanceKm: remainingRouteDistanceKm ?? distanceToNextStopKm,
+  const { etaMinutes: mapboxEtaMinutes } = nextStop
+    ? await calculateEta({
+        currentLat: tripRow.vehicleLatitude,
+        currentLng: tripRow.vehicleLongitude,
+        currentStopOrder,
+        routeStops,
+        scheduledDepartureTime: tripRow.scheduledDepartureTime,
+        targetStopOrder: nextStop.stopOrder,
+        tripId: tripRow.id,
+        tripStatus: tripRow.status,
       })
-    : null;
-  const etaMinutes = typeof liveEtaMinutes === "number"
-    ? liveEtaMinutes
+    : { etaMinutes: null };
+  const etaMinutes = mapboxEtaMinutes !== null
+    ? mapboxEtaMinutes
     : nextStop
-      ? Math.max(
-          0,
-          Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000),
-        )
+      ? Math.max(0, Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000))
       : 0;
   const occupiedSeats = Math.max(
     0,
@@ -1094,8 +1099,9 @@ export async function driverTrackTripLocation(
     routeDistanceMeters > trackingSettings.off_route_threshold_meters;
   const [existingLocationRow] = await db
     .select({
+      currentStopId:       vehicleLocations.currentStopId,
       lastOffRouteAlertAt: vehicleLocations.lastOffRouteAlertAt,
-      offRouteDetectedAt: vehicleLocations.offRouteDetectedAt,
+      offRouteDetectedAt:  vehicleLocations.offRouteDetectedAt,
     })
     .from(vehicleLocations)
     .where(eq(vehicleLocations.vehicleId, vehicleId))
@@ -1173,6 +1179,15 @@ export async function driverTrackTripLocation(
       tripId,
     });
   });
+
+  // Record stop arrival/departure for dwell-time averaging
+  const previousStopId = existingLocationRow?.currentStopId ?? null;
+  if (currentStopId && currentStopId !== previousStopId) {
+    await recordStopArrival(tripRow.id, currentStopId, now);
+    if (previousStopId) {
+      await recordStopDeparture(tripRow.id, previousStopId, now);
+    }
+  }
 
   if (shouldTriggerOffRouteAlert && roundedRouteDistanceMeters !== null) {
     const alertMetadata = {

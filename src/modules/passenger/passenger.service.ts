@@ -13,6 +13,7 @@ import {
   vehicles,
 } from "../../database/schema";
 import { NotFoundError } from "../../errors/app-error";
+import { calculateEta } from "../eta/eta.service";
 import { usersFindUserProfileById } from "../users/users.service";
 import {
   buildPassengerStopProgress,
@@ -449,11 +450,11 @@ function mapPassengerTripDetailStop(
   };
 }
 
-function buildPassengerTripDetail(
+async function buildPassengerTripDetail(
   row: PassengerTripDetailRow,
   routeStops: PassengerTrackingRouteStop[],
   gpsPoints: PassengerTrackingGpsPoint[],
-) : PassengerTripDetail {
+) : Promise<PassengerTripDetail> {
   const summary = mapPassengerTripSummary(row);
   const currentStopOrder = row.currentStopId
     ? routeStops.find((stopRow) => stopRow.id === row.currentStopId)?.stopOrder ?? null
@@ -478,15 +479,17 @@ function buildPassengerTripDetail(
     scheduledDepartureTime: row.scheduledDepartureTime,
     tripStatus: row.tripStatus,
   });
-  const etaMinutes = estimatePassengerEtaMinutes({
-    currentLatitude: row.vehicleLocationLatitude,
-    currentLongitude: row.vehicleLocationLongitude,
+  const etaResult = await calculateEta({
+    currentLat: row.vehicleLocationLatitude,
+    currentLng: row.vehicleLocationLongitude,
     currentStopOrder,
     routeStops,
     scheduledDepartureTime: row.scheduledDepartureTime,
     targetStopOrder: targetStop?.stopOrder ?? null,
+    tripId: row.tripId,
     tripStatus: row.tripStatus,
   });
+  const etaMinutes = etaResult.etaMinutes;
   const directDistanceKm = targetStop &&
     typeof targetStop.latitude === "number" &&
     typeof targetStop.longitude === "number" &&
@@ -585,5 +588,5 @@ export async function passengerViewTripById(
     passengerTripId: tripId,
   });
 
-  return buildPassengerTripDetail(row, routeStops, gpsPoints);
+  return await buildPassengerTripDetail(row, routeStops, gpsPoints);
 }

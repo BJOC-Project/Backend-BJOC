@@ -12,6 +12,7 @@ import {
   vehicles,
 } from "../../database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "../../errors/app-error";
+import { fetchLegDuration } from "../eta/mapbox-directions.service";
 import {
   operationsCreateRoute,
   operationsDeleteRoute,
@@ -111,8 +112,24 @@ function calculateFare(distanceKm: number) {
   return BASE_FARE + Math.max(0, roundedDistanceKm - 1) * FARE_STEP_AMOUNT;
 }
 
-function calculateEtaMinutes(distanceKm: number) {
-  return Math.max(5, Math.round((distanceKm / AVG_SPEED_KPH) * 60));
+async function calculateEtaMinutes(
+  fromStop: { id: string; latitude: number | null; longitude: number | null },
+  toStop:   { id: string; latitude: number | null; longitude: number | null },
+  distanceKmFallback: number,
+): Promise<number> {
+  const haversineFallback = Math.max(5, Math.round((distanceKmFallback / AVG_SPEED_KPH) * 60));
+  if (
+    fromStop.latitude == null || fromStop.longitude == null ||
+    toStop.latitude == null   || toStop.longitude == null
+  ) {
+    return haversineFallback;
+  }
+  const result = await fetchLegDuration(
+    { id: fromStop.id, latitude: fromStop.latitude, longitude: fromStop.longitude },
+    { id: toStop.id,   latitude: toStop.latitude,   longitude: toStop.longitude   },
+  );
+  if (result) return Math.round(result.durationSeconds / 60);
+  return haversineFallback;
 }
 
 function buildRouteName(
@@ -800,7 +817,11 @@ export async function findBestRoute(input: PlanRouteQuery) {
   }
 
   const fare = calculateFare(bestMatch.distanceKm);
-  const etaMinutes = calculateEtaMinutes(bestMatch.distanceKm);
+  const etaMinutes = await calculateEtaMinutes(
+    { id: bestMatch.boardingStop.stopId, latitude: bestMatch.boardingStop.latitude, longitude: bestMatch.boardingStop.longitude },
+    { id: bestMatch.dropoffStop.stopId,  latitude: bestMatch.dropoffStop.latitude,  longitude: bestMatch.dropoffStop.longitude  },
+    bestMatch.distanceKm,
+  );
 
   logger.info({
     msg: "Route plan generated",
@@ -918,7 +939,11 @@ export async function planRouteSegmentForPassenger(input: BookRouteBody) {
     routeStops: bookingSegment.routeStops,
   });
   const fare = calculateFare(bookingSegment.distanceKm);
-  const etaMinutes = calculateEtaMinutes(bookingSegment.distanceKm);
+  const etaMinutes = await calculateEtaMinutes(
+    { id: bookingSegment.pickupStop.stopId, latitude: bookingSegment.pickupStop.latitude, longitude: bookingSegment.pickupStop.longitude },
+    { id: bookingSegment.dropoffStop.stopId, latitude: bookingSegment.dropoffStop.latitude, longitude: bookingSegment.dropoffStop.longitude },
+    bookingSegment.distanceKm,
+  );
   const journeyStart = buildJourneyStart(bookingSegment.routeStops, nextBookableTrip);
 
   logger.info({

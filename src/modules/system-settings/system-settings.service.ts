@@ -16,6 +16,11 @@ type SystemSettingsRow = {
   driverTrackingDistanceMeters: number;
   driverTrackingIntervalSeconds: number;
   id: string;
+  mapboxCallsMonthKey: string;
+  mapboxCallsThisMonth: number;
+  mapboxCircuitBreakerLimit: number;
+  mapboxEnabled: boolean;
+  mapboxSegmentCacheTtlSeconds: number;
   offRouteAlertCooldownSeconds: number;
   offRouteThresholdMeters: number;
   updatedAt: Date;
@@ -54,17 +59,32 @@ function mapTrackingSettings(row: SystemSettingsRow): DriverTrackingSettings {
   };
 }
 
+function mapMapboxFields(row: SystemSettingsRow) {
+  return {
+    mapbox_enabled:                row.mapboxEnabled,
+    mapbox_circuit_breaker_limit:  row.mapboxCircuitBreakerLimit,
+    mapbox_segment_cache_ttl_seconds: row.mapboxSegmentCacheTtlSeconds,
+    mapbox_calls_this_month:       row.mapboxCallsThisMonth,
+    mapbox_calls_month_key:        row.mapboxCallsMonthKey,
+  };
+}
+
 async function fetchSettingsRow() {
   const [row] = await db
     .select({
-      createdAt: systemSettings.createdAt,
+      createdAt:                    systemSettings.createdAt,
       driverTrackingDistanceMeters: systemSettings.driverTrackingDistanceMeters,
-      driverTrackingIntervalSeconds: systemSettings.driverTrackingIntervalSeconds,
-      id: systemSettings.id,
+      driverTrackingIntervalSeconds:systemSettings.driverTrackingIntervalSeconds,
+      id:                           systemSettings.id,
+      mapboxCallsMonthKey:          systemSettings.mapboxCallsMonthKey,
+      mapboxCallsThisMonth:         systemSettings.mapboxCallsThisMonth,
+      mapboxCircuitBreakerLimit:    systemSettings.mapboxCircuitBreakerLimit,
+      mapboxEnabled:                systemSettings.mapboxEnabled,
+      mapboxSegmentCacheTtlSeconds: systemSettings.mapboxSegmentCacheTtlSeconds,
       offRouteAlertCooldownSeconds: systemSettings.offRouteAlertCooldownSeconds,
-      offRouteThresholdMeters: systemSettings.offRouteThresholdMeters,
-      updatedAt: systemSettings.updatedAt,
-      updatedBy: systemSettings.updatedBy,
+      offRouteThresholdMeters:      systemSettings.offRouteThresholdMeters,
+      updatedAt:                    systemSettings.updatedAt,
+      updatedBy:                    systemSettings.updatedBy,
     })
     .from(systemSettings)
     .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID))
@@ -138,6 +158,7 @@ export async function systemSettingsGetMaintenanceSettings(forceFresh = false): 
 
   return {
     ...mapTrackingSettings(row),
+    ...mapMapboxFields(row),
     updated_at: row.updatedAt,
     updated_by_name: updatedByName,
     updated_by_user_id: row.updatedBy,
@@ -153,23 +174,31 @@ export async function systemSettingsUpdateMaintenanceSettings(
   const [updatedRow] = await db
     .update(systemSettings)
     .set({
-      driverTrackingDistanceMeters: input.driver_tracking_distance_meters,
+      driverTrackingDistanceMeters:  input.driver_tracking_distance_meters,
       driverTrackingIntervalSeconds: input.driver_tracking_interval_seconds,
-      offRouteAlertCooldownSeconds: input.off_route_alert_cooldown_seconds,
-      offRouteThresholdMeters: input.off_route_threshold_meters,
+      offRouteAlertCooldownSeconds:  input.off_route_alert_cooldown_seconds,
+      offRouteThresholdMeters:       input.off_route_threshold_meters,
+      ...(input.mapbox_enabled !== undefined && { mapboxEnabled: input.mapbox_enabled }),
+      ...(input.mapbox_circuit_breaker_limit !== undefined && { mapboxCircuitBreakerLimit: input.mapbox_circuit_breaker_limit }),
+      ...(input.mapbox_segment_cache_ttl_seconds !== undefined && { mapboxSegmentCacheTtlSeconds: input.mapbox_segment_cache_ttl_seconds }),
       updatedAt: new Date(),
       updatedBy: actorUserId ?? null,
     })
     .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID))
     .returning({
-      createdAt: systemSettings.createdAt,
+      createdAt:                    systemSettings.createdAt,
       driverTrackingDistanceMeters: systemSettings.driverTrackingDistanceMeters,
-      driverTrackingIntervalSeconds: systemSettings.driverTrackingIntervalSeconds,
-      id: systemSettings.id,
+      driverTrackingIntervalSeconds:systemSettings.driverTrackingIntervalSeconds,
+      id:                           systemSettings.id,
+      mapboxCallsMonthKey:          systemSettings.mapboxCallsMonthKey,
+      mapboxCallsThisMonth:         systemSettings.mapboxCallsThisMonth,
+      mapboxCircuitBreakerLimit:    systemSettings.mapboxCircuitBreakerLimit,
+      mapboxEnabled:                systemSettings.mapboxEnabled,
+      mapboxSegmentCacheTtlSeconds: systemSettings.mapboxSegmentCacheTtlSeconds,
       offRouteAlertCooldownSeconds: systemSettings.offRouteAlertCooldownSeconds,
-      offRouteThresholdMeters: systemSettings.offRouteThresholdMeters,
-      updatedAt: systemSettings.updatedAt,
-      updatedBy: systemSettings.updatedBy,
+      offRouteThresholdMeters:      systemSettings.offRouteThresholdMeters,
+      updatedAt:                    systemSettings.updatedAt,
+      updatedBy:                    systemSettings.updatedBy,
     });
 
   if (!updatedRow) {
