@@ -513,8 +513,22 @@ function buildRouteLabel(input: {
   return buildRouteName(input.routeName, input.startLocation, input.endLocation);
 }
 
-export function driverViewProfile(userId: string) {
-  return usersFindUserProfileById(userId);
+export async function driverViewProfile(userId: string) {
+  const [profile, vehicleRow] = await Promise.all([
+    usersFindUserProfileById(userId),
+    db
+      .select({ plateNumber: vehicles.plateNumber })
+      .from(vehicleAssignments)
+      .innerJoin(vehicles, eq(vehicleAssignments.vehicleId, vehicles.id))
+      .where(eq(vehicleAssignments.driverUserId, userId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+  ]);
+
+  return {
+    ...profile,
+    assignedVehicle: vehicleRow?.plateNumber ?? null,
+  };
 }
 
 async function assertDriverSchedulableRoute(routeId: string) {
