@@ -591,6 +591,37 @@ export async function passengerViewTripById(
   return await buildPassengerTripDetail(row, routeStops, gpsPoints);
 }
 
+export async function passengerToggleFavorite(
+  passengerUserId: string,
+  tripId: string,
+  isFavorite: boolean,
+): Promise<void> {
+  const [existing] = await db
+    .select({ id: passengerTrips.id })
+    .from(passengerTrips)
+    .where(
+      and(
+        eq(passengerTrips.passengerUserId, passengerUserId),
+        eq(passengerTrips.tripId, tripId),
+      ),
+    )
+    .limit(1);
+
+  if (!existing) {
+    throw new NotFoundError("Booking not found");
+  }
+
+  await db
+    .update(passengerTrips)
+    .set({ isFavorite })
+    .where(
+      and(
+        eq(passengerTrips.passengerUserId, passengerUserId),
+        eq(passengerTrips.tripId, tripId),
+      ),
+    );
+}
+
 export async function passengerCancelBooking(
   userId: string,
   tripId: string,

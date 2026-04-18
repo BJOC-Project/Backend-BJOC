@@ -7,6 +7,7 @@ import { logger } from "./config/logger";
 import { errorMiddleware } from "./middleware/error.middleware";
 import { notFoundMiddleware } from "./middleware/not-found.middleware";
 import activityLogRoutes from "./modules/activityLogs/activityLogs.routes";
+import feedbackRoutes from "./modules/feedback/feedback.routes";
 import adminRoutes from "./modules/admin/admin.routes";
 import authRoutes from "./modules/auth/auth.routes";
 import driverRoutes from "./modules/drivers/driver.routes";
@@ -129,6 +130,8 @@ app.use("/api/passengers", passengerRoutes);
 app.use("/api/routes", routeRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/users", userRoutes);
+
+app.use("/api/feedback", feedbackRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);

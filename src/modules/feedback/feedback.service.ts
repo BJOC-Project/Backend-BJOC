@@ -56,3 +56,17 @@ export async function feedbackGetSuggestions(filter?: string) {
 
   return rows.filter((row) => !!row.message?.trim());
 }
+
+export async function feedbackSubmitRating(input: {
+  userId: string;
+  rating: number;
+  message?: string;
+  category?: string;
+}): Promise<void> {
+  await db.insert(appFeedback).values({
+    userId: input.userId,
+    rating: input.rating,
+    message: input.message ?? null,
+    category: input.category ?? null,
+  });
+}

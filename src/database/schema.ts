@@ -157,6 +157,7 @@ export const passengerTrips = pgTable("passenger_trips", {
   dropoffStopId: uuid("dropoff_stop_id").references(() => stops.id, { onDelete: "set null" }),
   status: passengerTripStatusEnum("status").notNull().default("booked"),
   fare: doublePrecision("fare"),
+  isFavorite: boolean("is_favorite").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   passengerTripsTripIndex: index("passenger_trips_trip_idx").on(table.tripId),

@@ -13,6 +13,7 @@ import {
   passengerListFavoriteTrips,
   passengerListRecentTrips,
   passengerListTrips,
+  passengerToggleFavorite,
   passengerViewProfile,
   passengerViewTripById,
 } from "./passenger.service";
@@ -129,4 +130,14 @@ export const passengerCancelTripBooking = asyncHandler(async (
   const { tripId } = req.params as { tripId: string };
   await passengerCancelBooking(req.authUser!.userId, tripId);
   sendSuccess(res, null, "Booking cancelled");
+});
+
+export const passengerToggleTripFavorite = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const { tripId } = req.params as { tripId: string };
+  const { is_favorite } = req.body as { is_favorite: boolean };
+  await passengerToggleFavorite(req.authUser!.userId, tripId, is_favorite);
+  sendSuccess(res, null, is_favorite ? "Trip added to favorites" : "Trip removed from favorites");
 });

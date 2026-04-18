@@ -30,6 +30,7 @@ import type {
 } from "./routes.validation";
 
 export interface StopArrivalEtaResult {
+  availableSeats?: number | null;
   driverName?: string | null;
   etaMinutes: number;
   plateNumber?: string | null;
@@ -1216,6 +1217,8 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
         vehicleId: trips.vehicleId,
         vehicleLat: vehicleLocations.latitude,
         vehicleLng: vehicleLocations.longitude,
+        recordedPassengerCount: trips.recordedPassengerCount,
+        seatCapacity: vehicles.capacity,
       })
       .from(trips)
       .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
@@ -1252,6 +1255,7 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
 
         if (estimatedMinutesToStop >= 0) {
           results.push({
+            availableSeats: null,
             driverName: null,
             etaMinutes: estimatedMinutesToStop,
             plateNumber: null,
@@ -1286,7 +1290,13 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
         ? `${trip.driverFirstName} ${trip.driverLastName ?? ""}`.trim()
         : null;
 
+      const availableSeats =
+        typeof trip.seatCapacity === "number" && typeof trip.recordedPassengerCount === "number"
+          ? Math.max(0, trip.seatCapacity - trip.recordedPassengerCount)
+          : null;
+
       results.push({
+        availableSeats,
         driverName,
         etaMinutes: etaResult.etaMinutes ?? 0,
         plateNumber: trip.plateNumber,

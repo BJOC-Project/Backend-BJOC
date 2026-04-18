@@ -13,6 +13,7 @@ import {
   passengerGetTripById,
   passengerGetTrips,
   passengerRequestEmailChangeCode,
+  passengerToggleTripFavorite,
   passengerVerifyEmailChangeCode,
 } from "./passenger.controller";
 import {
@@ -21,6 +22,7 @@ import {
   passengerNameUpdateSchema,
   passengerPasswordUpdateSchema,
   passengerProfilePhotoUpdateSchema,
+  passengerTripFavoriteSchema,
   passengerTripParamsSchema,
 } from "./passenger.validation";
 
@@ -56,6 +58,7 @@ router.patch(
 router.get("/trips/recent", passengerGetRecentTrips);
 router.get("/trips/favorites", passengerGetFavoriteTrips);
 router.patch("/trips/:tripId/cancel", validate({ params: passengerTripParamsSchema }), passengerCancelTripBooking);
+router.patch("/trips/:tripId/favorite", validate(passengerTripFavoriteSchema), passengerToggleTripFavorite);
 router.get("/trips/:tripId", validate({ params: passengerTripParamsSchema }), passengerGetTripById);
 router.get("/trips", passengerGetTrips);
 

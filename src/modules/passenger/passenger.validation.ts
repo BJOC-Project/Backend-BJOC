@@ -53,3 +53,8 @@ export const passengerProfilePhotoUpdateSchema = {
 };
 
 export type PassengerTripParams = z.infer<typeof passengerTripParamsSchema>;
+
+export const passengerTripFavoriteSchema = {
+  params: passengerTripParamsSchema,
+  body: z.object({ is_favorite: z.boolean() }),
+};
