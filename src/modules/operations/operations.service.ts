@@ -1857,6 +1857,30 @@ export async function operationsPublishRoute(
   };
 }
 
+export async function operationsToggleRouteStatus(
+  routeId: string,
+  isActive: boolean,
+  actorUserId?: string,
+) {
+  await assertRouteExists(routeId);
+
+  await db
+    .update(transitRoutes)
+    .set({ isActive, updatedAt: new Date() })
+    .where(eq(transitRoutes.id, routeId));
+
+  await writeActivityLog({
+    action: isActive ? "ACTIVATE_ROUTE" : "DEACTIVATE_ROUTE",
+    description: `${isActive ? "Activated" : "Deactivated"} route ${routeId}.`,
+    module: "routes",
+    performedBy: actorUserId,
+  });
+
+  logger.info({ msg: "Route status updated", actorUserId, isActive, routeId });
+
+  return operationsListRoutes();
+}
+
 export async function operationsListStops(routeId?: string) {
   const rows = await db
     .select({

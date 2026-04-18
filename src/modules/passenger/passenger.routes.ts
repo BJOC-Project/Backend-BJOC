@@ -3,6 +3,7 @@ import { authenticateRequest } from "../../middleware/auth.middleware";
 import { authorizeRoles } from "../../middleware/role.middleware";
 import { validate } from "../../middleware/validation.middleware";
 import {
+  passengerCancelTripBooking,
   passengerGetFavoriteTrips,
   passengerPatchName,
   passengerPatchPassword,
@@ -54,6 +55,7 @@ router.patch(
 );
 router.get("/trips/recent", passengerGetRecentTrips);
 router.get("/trips/favorites", passengerGetFavoriteTrips);
+router.patch("/trips/:tripId/cancel", validate({ params: passengerTripParamsSchema }), passengerCancelTripBooking);
 router.get("/trips/:tripId", validate({ params: passengerTripParamsSchema }), passengerGetTripById);
 router.get("/trips", passengerGetTrips);
 

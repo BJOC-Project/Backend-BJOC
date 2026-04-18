@@ -35,9 +35,19 @@ export const updateRouteBodySchema = z.object({
   start_location: z.string().trim().min(1).optional(),
 });
 
+export const routeStatusBodySchema = z.object({
+  is_active: z.boolean(),
+});
+
+export const stopEtaQuerySchema = z.object({
+  stopId: z.string().uuid(),
+});
+
 export type PlanRouteQuery = z.infer<typeof planRouteQuerySchema>;
 export type RouteSegmentQuery = z.infer<typeof routeSegmentQuerySchema>;
 export type BookRouteBody = z.infer<typeof bookRouteBodySchema>;
 export type CreateRouteBody = z.infer<typeof createRouteBodySchema>;
 export type RouteIdParams = z.infer<typeof routeIdParamSchema>;
 export type UpdateRouteBody = z.infer<typeof updateRouteBodySchema>;
+export type RouteStatusBody = z.infer<typeof routeStatusBodySchema>;
+export type StopEtaQuery = z.infer<typeof stopEtaQuerySchema>;

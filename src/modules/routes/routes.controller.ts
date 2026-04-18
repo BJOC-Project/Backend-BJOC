@@ -5,12 +5,14 @@ import { NotFoundError } from "../../errors/app-error";
 import {
   bookRouteForPassenger,
   findBestRoute,
+  getStopArrivalEta,
   listPassengerRouteOptions,
   planRouteSegmentForPassenger,
   routeCreateRoute,
   routeDeleteRoute,
   routeListRoutes,
   routePublishRoute,
+  routeToggleStatus,
   routeUpdateRoute,
 } from "./routes.service";
 import type {
@@ -19,6 +21,8 @@ import type {
   PlanRouteQuery,
   RouteIdParams,
   RouteSegmentQuery,
+  RouteStatusBody,
+  StopEtaQuery,
   UpdateRouteBody,
 } from "./routes.validation";
 
@@ -106,4 +110,23 @@ export const routePublish = asyncHandler(async (
   const params = req.params as unknown as RouteIdParams;
   const result = await routePublishRoute(params.routeId, req.authUser?.userId);
   sendSuccess(res, result, "Route published");
+});
+
+export const routeToggle = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const params = req.params as unknown as RouteIdParams;
+  const body = req.body as RouteStatusBody;
+  const result = await routeToggleStatus(params.routeId, body.is_active, req.authUser?.userId);
+  sendSuccess(res, result, body.is_active ? "Route activated" : "Route deactivated");
+});
+
+export const routeGetStopEta = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const query = req.query as unknown as StopEtaQuery;
+  const result = await getStopArrivalEta(query.stopId);
+  sendSuccess(res, result, "Stop arrival ETA loaded");
 });
