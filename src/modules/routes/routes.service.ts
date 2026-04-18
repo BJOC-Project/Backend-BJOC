@@ -1160,15 +1160,29 @@ export function routeToggleStatus(
 }
 
 export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaResult[]> {
-  // 1. Find all active routes that contain this stop
+  // 1a. Resolve the stop's name so we can match it across all routes.
+  //     The passenger's saved preferred-stop ID may point to a stop on a route
+  //     that has no active trip, even though the same named stop exists on another
+  //     active route.  Matching by name lets us find the vehicle regardless of
+  //     which route entity the passenger originally selected from.
+  const [stopInfo] = await db
+    .select({ id: stops.id, stopName: stops.stopName })
+    .from(stops)
+    .where(eq(stops.id, stopId))
+    .limit(1);
+
+  if (!stopInfo) return [];
+
+  // 1b. Find all active routes that contain a stop with this name.
+  //     We intentionally do NOT filter by stops.isActive — a stop can be marked
+  //     inactive in the admin panel while the route is still running.
   const routeRows = await db
     .selectDistinct({ routeId: stops.routeId })
     .from(stops)
     .innerJoin(transitRoutes, eq(stops.routeId, transitRoutes.id))
     .where(
       and(
-        eq(stops.id, stopId),
-        eq(stops.isActive, true),
+        stopInfo.stopName ? eq(stops.stopName, stopInfo.stopName) : eq(stops.id, stopId),
         eq(transitRoutes.isActive, true),
       ),
     );
@@ -1179,11 +1193,17 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
   const results: StopArrivalEtaResult[] = [];
 
   for (const routeId of routeIds) {
-    // 2. Find the target stop's order on this route
+    // 2. Find the target stop on THIS route — match by name so we get the correct
+    //    stopOrder even when the original stopId is from a different route entity.
     const [targetStop] = await db
       .select({ id: stops.id, stopOrder: stops.stopOrder, latitude: stops.latitude, longitude: stops.longitude })
       .from(stops)
-      .where(and(eq(stops.id, stopId), eq(stops.routeId, routeId)))
+      .where(
+        and(
+          eq(stops.routeId, routeId),
+          stopInfo.stopName ? eq(stops.stopName, stopInfo.stopName) : eq(stops.id, stopId),
+        ),
+      )
       .limit(1);
 
     if (!targetStop) continue;
@@ -1309,4 +1329,130 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
   }
 
   return results.sort((a, b) => a.etaMinutes - b.etaMinutes);
+}
+
+export interface VehicleProgressStop {
+  etaMinutes: number;
+  status: "passed" | "current" | "upcoming";
+  stopId: string;
+  stopName: string;
+  stopOrder: number;
+}
+
+export interface VehicleProgressResult {
+  availableSeats: number | null;
+  currentStopOrder: number | null;
+  plateNumber: string | null;
+  routeId: string;
+  routeName: string;
+  stops: VehicleProgressStop[];
+  vehicleId: string;
+}
+
+export async function getVehicleProgress(stopId: string): Promise<VehicleProgressResult[]> {
+  const [stopInfo] = await db
+    .select({ id: stops.id, stopName: stops.stopName })
+    .from(stops)
+    .where(eq(stops.id, stopId))
+    .limit(1);
+
+  if (!stopInfo) return [];
+
+  const routeRows = await db
+    .selectDistinct({ routeId: stops.routeId })
+    .from(stops)
+    .innerJoin(transitRoutes, eq(stops.routeId, transitRoutes.id))
+    .where(
+      and(
+        stopInfo.stopName ? eq(stops.stopName, stopInfo.stopName) : eq(stops.id, stopId),
+        eq(transitRoutes.isActive, true),
+      ),
+    );
+
+  if (routeRows.length === 0) return [];
+
+  const results: VehicleProgressResult[] = [];
+
+  for (const { routeId } of routeRows) {
+    const routeStops = await db
+      .select({
+        id: stops.id,
+        latitude: stops.latitude,
+        longitude: stops.longitude,
+        stopName: stops.stopName,
+        stopOrder: stops.stopOrder,
+      })
+      .from(stops)
+      .where(and(eq(stops.routeId, routeId), eq(stops.isActive, true)))
+      .orderBy(asc(stops.stopOrder));
+
+    const ongoingTrips = await db
+      .select({
+        currentStopId: vehicleLocations.currentStopId,
+        plateNumber: vehicles.plateNumber,
+        routeId: transitRoutes.id,
+        routeName: transitRoutes.routeName,
+        scheduledDepartureTime: trips.scheduledDepartureTime,
+        tripId: trips.id,
+        vehicleId: trips.vehicleId,
+        vehicleLat: vehicleLocations.latitude,
+        vehicleLng: vehicleLocations.longitude,
+        recordedPassengerCount: trips.recordedPassengerCount,
+        seatCapacity: vehicles.capacity,
+      })
+      .from(trips)
+      .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+      .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
+      .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+      .where(and(eq(trips.routeId, routeId), eq(trips.status, "ongoing")))
+      .limit(3);
+
+    for (const trip of ongoingTrips) {
+      const currentStopOrder = trip.currentStopId
+        ? (routeStops.find((s) => s.id === trip.currentStopId)?.stopOrder ?? null)
+        : null;
+
+      const progressStops: VehicleProgressStop[] = await Promise.all(
+        routeStops.map(async (stopRow): Promise<VehicleProgressStop> => {
+          if (currentStopOrder !== null && stopRow.stopOrder < currentStopOrder) {
+            return { etaMinutes: 0, status: "passed", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+          }
+
+          if (currentStopOrder !== null && stopRow.stopOrder === currentStopOrder) {
+            return { etaMinutes: 0, status: "current", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+          }
+
+          const etaResult = await calculateEta({
+            currentLat: trip.vehicleLat,
+            currentLng: trip.vehicleLng,
+            currentStopOrder,
+            routeStops,
+            scheduledDepartureTime: trip.scheduledDepartureTime,
+            targetStopOrder: stopRow.stopOrder,
+            tripId: trip.tripId,
+            tripStatus: "ongoing",
+          });
+
+          return { etaMinutes: etaResult.etaMinutes ?? 0, status: "upcoming", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+        }),
+      );
+
+      const availableSeats =
+        typeof trip.seatCapacity === "number" && typeof trip.recordedPassengerCount === "number"
+          ? Math.max(0, trip.seatCapacity - trip.recordedPassengerCount)
+          : null;
+
+      results.push({
+        availableSeats,
+        currentStopOrder,
+        plateNumber: trip.plateNumber,
+        routeId: trip.routeId,
+        routeName: trip.routeName ?? routeId,
+        stops: progressStops,
+        vehicleId: trip.vehicleId ?? "",
+      });
+    }
+  }
+
+  return results;
 }

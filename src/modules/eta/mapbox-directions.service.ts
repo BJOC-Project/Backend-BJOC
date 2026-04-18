@@ -52,6 +52,12 @@ function currentMonthKey(): string {
  *
  * Returns null on any failure so callers can fall back to haversine.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string) {
+  return UUID_RE.test(value);
+}
+
 export async function fetchLegDuration(
   fromStop: StopCoords,
   toStop: StopCoords,
@@ -81,22 +87,25 @@ export async function fetchLegDuration(
     return null;
   }
 
-  // Check DB cache for this stop pair
-  const ttlCutoff = new Date(Date.now() - mapboxSegmentCacheTtlSeconds * 1000);
-  const [cached] = await db
-    .select({ durationSeconds: routeSegmentEtaCache.durationSeconds })
-    .from(routeSegmentEtaCache)
-    .where(
-      and(
-        eq(routeSegmentEtaCache.fromStopId, fromStop.id),
-        eq(routeSegmentEtaCache.toStopId, toStop.id),
-        gt(routeSegmentEtaCache.cachedAt, ttlCutoff),
-      ),
-    )
-    .limit(1);
+  // Check DB cache for this stop pair (only when both IDs are real UUIDs)
+  const canCache = isUuid(fromStop.id) && isUuid(toStop.id);
+  if (canCache) {
+    const ttlCutoff = new Date(Date.now() - mapboxSegmentCacheTtlSeconds * 1000);
+    const [cached] = await db
+      .select({ durationSeconds: routeSegmentEtaCache.durationSeconds })
+      .from(routeSegmentEtaCache)
+      .where(
+        and(
+          eq(routeSegmentEtaCache.fromStopId, fromStop.id),
+          eq(routeSegmentEtaCache.toStopId, toStop.id),
+          gt(routeSegmentEtaCache.cachedAt, ttlCutoff),
+        ),
+      )
+      .limit(1);
 
-  if (cached) {
-    return { durationSeconds: cached.durationSeconds };
+    if (cached) {
+      return { durationSeconds: cached.durationSeconds };
+    }
   }
 
   // Cache miss — call Mapbox
@@ -124,13 +133,15 @@ export async function fetchLegDuration(
 
   // Upsert cache row and increment counter (best-effort — don't fail ETA on DB error)
   try {
-    await db
-      .insert(routeSegmentEtaCache)
-      .values({ fromStopId: fromStop.id, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
-      .onConflictDoUpdate({
-        target: [routeSegmentEtaCache.fromStopId, routeSegmentEtaCache.toStopId],
-        set: { durationSeconds, cachedAt: new Date() },
-      });
+    if (canCache) {
+      await db
+        .insert(routeSegmentEtaCache)
+        .values({ fromStopId: fromStop.id, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
+        .onConflictDoUpdate({
+          target: [routeSegmentEtaCache.fromStopId, routeSegmentEtaCache.toStopId],
+          set: { durationSeconds, cachedAt: new Date() },
+        });
+    }
 
     await db
       .update(systemSettings)

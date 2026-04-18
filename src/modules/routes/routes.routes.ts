@@ -7,6 +7,7 @@ import {
   planRoute,
   routeGetPassengerOptions,
   routeGetStopEta,
+  routeGetVehicleProgress,
   routePlanSegment,
   routeCreate,
   routeDelete,
@@ -38,6 +39,7 @@ router.patch("/:routeId/status", authenticateRequest, authorizeRoles("admin", "s
 router.use(authenticateRequest, authorizeRoles("passenger"));
 router.get("/options", routeGetPassengerOptions);
 router.get("/stop-eta", validate({ query: stopEtaQuerySchema }), routeGetStopEta);
+router.get("/vehicle-progress", validate({ query: stopEtaQuerySchema }), routeGetVehicleProgress);
 router.get("/plan", validate({ query: planRouteQuerySchema }), planRoute);
 router.get("/segment", validate({ query: routeSegmentQuerySchema }), routePlanSegment);
 router.post("/book", validate({ body: bookRouteBodySchema }), bookRoute);

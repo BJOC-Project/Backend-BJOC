@@ -828,16 +828,39 @@ export async function driverGetTripManagement(
     ? routeStops.find((stopRow) => stopRow.id === tripRow.currentStopId)?.stopOrder ?? null
     : null;
 
-  const mappedStops = routeStops.map((stopRow) => ({
-    id: stopRow.id,
-    scheduled_time: addMinutes(
-      tripRow.scheduledDepartureTime,
-      Math.max(0, stopRow.stopOrder - 1) * ROUTE_STOP_INTERVAL_MINUTES,
-    ),
-    status: deriveStopStatus(currentStopOrder, stopRow.stopOrder),
-    stop_name: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`,
-    waiting_count: waitingCountByStopId.get(stopRow.id) ?? 0,
-    stopOrder: stopRow.stopOrder,
+  const mappedStops = await Promise.all(routeStops.map(async (stopRow) => {
+    const stopStatus = deriveStopStatus(currentStopOrder, stopRow.stopOrder);
+    let scheduled_time: Date;
+
+    if (stopStatus === "upcoming" || stopStatus === "current") {
+      const { etaMinutes } = await calculateEta({
+        currentLat: tripRow.vehicleLatitude,
+        currentLng: tripRow.vehicleLongitude,
+        currentStopOrder,
+        routeStops,
+        scheduledDepartureTime: tripRow.scheduledDepartureTime,
+        targetStopOrder: stopRow.stopOrder,
+        tripId: tripRow.id,
+        tripStatus: tripRow.status,
+      });
+      scheduled_time = etaMinutes != null
+        ? new Date(Date.now() + etaMinutes * 60_000)
+        : addMinutes(tripRow.scheduledDepartureTime, Math.max(0, stopRow.stopOrder - 1) * ROUTE_STOP_INTERVAL_MINUTES);
+    } else {
+      scheduled_time = addMinutes(
+        tripRow.scheduledDepartureTime,
+        Math.max(0, stopRow.stopOrder - 1) * ROUTE_STOP_INTERVAL_MINUTES,
+      );
+    }
+
+    return {
+      id: stopRow.id,
+      scheduled_time,
+      status: stopStatus,
+      stop_name: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`,
+      waiting_count: waitingCountByStopId.get(stopRow.id) ?? 0,
+      stopOrder: stopRow.stopOrder,
+    };
   }));
 
   const nextStop = mappedStops.find((stopRow) => stopRow.status === "current")

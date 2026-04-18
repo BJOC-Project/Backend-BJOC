@@ -6,6 +6,7 @@ import {
   bookRouteForPassenger,
   findBestRoute,
   getStopArrivalEta,
+  getVehicleProgress,
   listPassengerRouteOptions,
   planRouteSegmentForPassenger,
   routeCreateRoute,
@@ -129,4 +130,13 @@ export const routeGetStopEta = asyncHandler(async (
   const query = req.query as unknown as StopEtaQuery;
   const result = await getStopArrivalEta(query.stopId);
   sendSuccess(res, result, "Stop arrival ETA loaded");
+});
+
+export const routeGetVehicleProgress = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const query = req.query as unknown as StopEtaQuery;
+  const result = await getVehicleProgress(query.stopId);
+  sendSuccess(res, result, "Vehicle progress loaded");
 });
