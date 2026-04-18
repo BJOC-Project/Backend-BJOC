@@ -25,6 +25,7 @@ const envSchema = z.object({
   SUPABASE_URL: z.url("SUPABASE_URL must be a valid URL").optional(),
   SUPABASE_ANON_KEY: z.string().min(1, "SUPABASE_ANON_KEY is required").optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required").optional(),
+  MAPBOX_ACCESS_TOKEN: z.string().min(1, "MAPBOX_ACCESS_TOKEN is required"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

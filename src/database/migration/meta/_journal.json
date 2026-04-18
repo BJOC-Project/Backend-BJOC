@@ -22,6 +22,20 @@
       "when": 1776270249366,
       "tag": "0002_smiling_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776414028031,
+      "tag": "0003_quiet_sasquatch",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776414097830,
+      "tag": "0004_flowery_tomas",
+      "breakpoints": true
     }
   ]
 }

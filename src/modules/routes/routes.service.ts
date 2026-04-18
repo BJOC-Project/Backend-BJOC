@@ -12,19 +12,32 @@ import {
   vehicles,
 } from "../../database/schema";
 import { BadRequestError, ConflictError, NotFoundError } from "../../errors/app-error";
+import { fetchLegDuration } from "../eta/mapbox-directions.service";
 import {
   operationsCreateRoute,
   operationsDeleteRoute,
   operationsListRoutes,
   operationsPublishRoute,
+  operationsToggleRouteStatus,
   operationsUpdateRoute,
 } from "../operations/operations.service";
+import { calculateEta } from "../eta/eta.service";
 import type {
   BookRouteBody,
   CreateRouteBody,
   PlanRouteQuery,
   UpdateRouteBody,
 } from "./routes.validation";
+
+export interface StopArrivalEtaResult {
+  driverName?: string | null;
+  etaMinutes: number;
+  plateNumber?: string | null;
+  routeId: string;
+  routeName: string;
+  source: "live" | "scheduled";
+  vehicleId?: string | null;
+}
 
 const EARTH_RADIUS_KM = 6371;
 const BASE_FARE = 15;
@@ -111,8 +124,24 @@ function calculateFare(distanceKm: number) {
   return BASE_FARE + Math.max(0, roundedDistanceKm - 1) * FARE_STEP_AMOUNT;
 }
 
-function calculateEtaMinutes(distanceKm: number) {
-  return Math.max(5, Math.round((distanceKm / AVG_SPEED_KPH) * 60));
+async function calculateEtaMinutes(
+  fromStop: { id: string; latitude: number | null; longitude: number | null },
+  toStop:   { id: string; latitude: number | null; longitude: number | null },
+  distanceKmFallback: number,
+): Promise<number> {
+  const haversineFallback = Math.max(5, Math.round((distanceKmFallback / AVG_SPEED_KPH) * 60));
+  if (
+    fromStop.latitude == null || fromStop.longitude == null ||
+    toStop.latitude == null   || toStop.longitude == null
+  ) {
+    return haversineFallback;
+  }
+  const result = await fetchLegDuration(
+    { id: fromStop.id, latitude: fromStop.latitude, longitude: fromStop.longitude },
+    { id: toStop.id,   latitude: toStop.latitude,   longitude: toStop.longitude   },
+  );
+  if (result) return Math.round(result.durationSeconds / 60);
+  return haversineFallback;
 }
 
 function buildRouteName(
@@ -800,7 +829,11 @@ export async function findBestRoute(input: PlanRouteQuery) {
   }
 
   const fare = calculateFare(bestMatch.distanceKm);
-  const etaMinutes = calculateEtaMinutes(bestMatch.distanceKm);
+  const etaMinutes = await calculateEtaMinutes(
+    { id: bestMatch.boardingStop.stopId, latitude: bestMatch.boardingStop.latitude, longitude: bestMatch.boardingStop.longitude },
+    { id: bestMatch.dropoffStop.stopId,  latitude: bestMatch.dropoffStop.latitude,  longitude: bestMatch.dropoffStop.longitude  },
+    bestMatch.distanceKm,
+  );
 
   logger.info({
     msg: "Route plan generated",
@@ -918,7 +951,11 @@ export async function planRouteSegmentForPassenger(input: BookRouteBody) {
     routeStops: bookingSegment.routeStops,
   });
   const fare = calculateFare(bookingSegment.distanceKm);
-  const etaMinutes = calculateEtaMinutes(bookingSegment.distanceKm);
+  const etaMinutes = await calculateEtaMinutes(
+    { id: bookingSegment.pickupStop.stopId, latitude: bookingSegment.pickupStop.latitude, longitude: bookingSegment.pickupStop.longitude },
+    { id: bookingSegment.dropoffStop.stopId, latitude: bookingSegment.dropoffStop.latitude, longitude: bookingSegment.dropoffStop.longitude },
+    bookingSegment.distanceKm,
+  );
   const journeyStart = buildJourneyStart(bookingSegment.routeStops, nextBookableTrip);
 
   logger.info({
@@ -1111,4 +1148,155 @@ export function routePublishRoute(
   actorUserId?: string,
 ) {
   return operationsPublishRoute(routeId, actorUserId);
+}
+
+export function routeToggleStatus(
+  routeId: string,
+  isActive: boolean,
+  actorUserId?: string,
+) {
+  return operationsToggleRouteStatus(routeId, isActive, actorUserId);
+}
+
+export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaResult[]> {
+  // 1. Find all active routes that contain this stop
+  const routeRows = await db
+    .selectDistinct({ routeId: stops.routeId })
+    .from(stops)
+    .innerJoin(transitRoutes, eq(stops.routeId, transitRoutes.id))
+    .where(
+      and(
+        eq(stops.id, stopId),
+        eq(stops.isActive, true),
+        eq(transitRoutes.isActive, true),
+      ),
+    );
+
+  if (routeRows.length === 0) return [];
+
+  const routeIds = routeRows.map((r) => r.routeId);
+  const results: StopArrivalEtaResult[] = [];
+
+  for (const routeId of routeIds) {
+    // 2. Find the target stop's order on this route
+    const [targetStop] = await db
+      .select({ id: stops.id, stopOrder: stops.stopOrder, latitude: stops.latitude, longitude: stops.longitude })
+      .from(stops)
+      .where(and(eq(stops.id, stopId), eq(stops.routeId, routeId)))
+      .limit(1);
+
+    if (!targetStop) continue;
+
+    // 3. Get all stops for this route in order
+    const routeStops = await db
+      .select({
+        id: stops.id,
+        latitude: stops.latitude,
+        longitude: stops.longitude,
+        stopName: stops.stopName,
+        stopOrder: stops.stopOrder,
+      })
+      .from(stops)
+      .where(and(eq(stops.routeId, routeId), eq(stops.isActive, true)))
+      .orderBy(asc(stops.stopOrder));
+
+    const driverAlias = users;
+
+    // 4. Find ongoing trips on this route with vehicle location
+    const ongoingTrips = await db
+      .select({
+        currentStopId: vehicleLocations.currentStopId,
+        driverFirstName: users.firstName,
+        driverLastName: users.lastName,
+        plateNumber: vehicles.plateNumber,
+        routeId: transitRoutes.id,
+        routeName: transitRoutes.routeName,
+        scheduledDepartureTime: trips.scheduledDepartureTime,
+        tripId: trips.id,
+        vehicleId: trips.vehicleId,
+        vehicleLat: vehicleLocations.latitude,
+        vehicleLng: vehicleLocations.longitude,
+      })
+      .from(trips)
+      .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+      .leftJoin(vehicleLocations, eq(vehicleLocations.vehicleId, trips.vehicleId))
+      .leftJoin(vehicles, eq(trips.vehicleId, vehicles.id))
+      .leftJoin(driverAlias, eq(trips.driverUserId, driverAlias.id))
+      .where(and(eq(trips.routeId, routeId), eq(trips.status, "ongoing")))
+      .limit(5);
+
+    if (ongoingTrips.length === 0) {
+      // 5. Fallback: find next scheduled trip and estimate minutes from now
+      const [nextTrip] = await db
+        .select({
+          routeId: transitRoutes.id,
+          routeName: transitRoutes.routeName,
+          scheduledDepartureTime: trips.scheduledDepartureTime,
+          vehicleId: trips.vehicleId,
+        })
+        .from(trips)
+        .innerJoin(transitRoutes, eq(trips.routeId, transitRoutes.id))
+        .where(and(eq(trips.routeId, routeId), eq(trips.status, "scheduled")))
+        .orderBy(asc(trips.scheduledDepartureTime))
+        .limit(1);
+
+      if (nextTrip) {
+        const minutesUntilDeparture = Math.max(
+          0,
+          Math.round((nextTrip.scheduledDepartureTime.getTime() - Date.now()) / 60_000),
+        );
+
+        // Add stops before target stop to get time-to-reach estimate
+        const stopsBeforeTarget = routeStops.filter((s) => s.stopOrder < targetStop.stopOrder).length;
+        const estimatedMinutesToStop = minutesUntilDeparture + stopsBeforeTarget;
+
+        if (estimatedMinutesToStop >= 0) {
+          results.push({
+            driverName: null,
+            etaMinutes: estimatedMinutesToStop,
+            plateNumber: null,
+            routeId: nextTrip.routeId,
+            routeName: nextTrip.routeName ?? routeId,
+            source: "scheduled",
+            vehicleId: nextTrip.vehicleId,
+          });
+        }
+      }
+      continue;
+    }
+
+    // 6. For each ongoing trip compute real ETA
+    for (const trip of ongoingTrips) {
+      const currentStopOrder = trip.currentStopId
+        ? (routeStops.find((s) => s.id === trip.currentStopId)?.stopOrder ?? null)
+        : null;
+
+      const etaResult = await calculateEta({
+        currentLat: trip.vehicleLat,
+        currentLng: trip.vehicleLng,
+        currentStopOrder,
+        routeStops,
+        scheduledDepartureTime: trip.scheduledDepartureTime,
+        targetStopOrder: targetStop.stopOrder,
+        tripId: trip.tripId,
+        tripStatus: "ongoing",
+      });
+
+      const driverName = trip.driverFirstName
+        ? `${trip.driverFirstName} ${trip.driverLastName ?? ""}`.trim()
+        : null;
+
+      results.push({
+        driverName,
+        etaMinutes: etaResult.etaMinutes ?? 0,
+        plateNumber: trip.plateNumber,
+        routeId: trip.routeId,
+        routeName: trip.routeName ?? routeId,
+        source: "live",
+        vehicleId: trip.vehicleId,
+      });
+    }
+  }
+
+  return results.sort((a, b) => a.etaMinutes - b.etaMinutes);
 }

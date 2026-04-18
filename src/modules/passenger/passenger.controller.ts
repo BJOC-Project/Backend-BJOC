@@ -9,6 +9,7 @@ import {
   passengerVerifyEmailChange,
 } from "./passenger.account.service";
 import {
+  passengerCancelBooking,
   passengerListFavoriteTrips,
   passengerListRecentTrips,
   passengerListTrips,
@@ -119,4 +120,13 @@ export const passengerGetTripById = asyncHandler(async (
   );
 
   sendSuccess(res, result, "Passenger trip loaded");
+});
+
+export const passengerCancelTripBooking = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const { tripId } = req.params as { tripId: string };
+  await passengerCancelBooking(req.authUser!.userId, tripId);
+  sendSuccess(res, null, "Booking cancelled");
 });

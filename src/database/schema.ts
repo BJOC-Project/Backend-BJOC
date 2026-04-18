@@ -260,12 +260,42 @@ export const appFeedback = pgTable("app_feedback", {
   appFeedbackUserIndex: index("app_feedback_user_id_idx").on(table.userId),
 }));
 
+export const stopDwellTimes = pgTable("stop_dwell_times", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tripId: uuid("trip_id").notNull().references(() => trips.id, { onDelete: "cascade" }),
+  stopId: uuid("stop_id").notNull().references(() => stops.id, { onDelete: "cascade" }),
+  arrivedAt: timestamp("arrived_at", { withTimezone: true }).notNull(),
+  departedAt: timestamp("departed_at", { withTimezone: true }),
+  dwellSeconds: integer("dwell_seconds"),
+  hourBucket: integer("hour_bucket"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  stopDwellStopIdx:   index("stop_dwell_times_stop_id_idx").on(table.stopId),
+  stopDwellTripIdx:   index("stop_dwell_times_trip_id_idx").on(table.tripId),
+  stopDwellBucketIdx: index("stop_dwell_times_hour_bucket_idx").on(table.stopId, table.hourBucket),
+}));
+
+export const routeSegmentEtaCache = pgTable("route_segment_eta_cache", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  fromStopId:      uuid("from_stop_id").notNull().references(() => stops.id, { onDelete: "cascade" }),
+  toStopId:        uuid("to_stop_id").notNull().references(() => stops.id, { onDelete: "cascade" }),
+  durationSeconds: integer("duration_seconds").notNull(),
+  cachedAt:        timestamp("cached_at", { withTimezone: true }).notNull(),
+}, (table) => ({
+  segmentCacheIdx: uniqueIndex("route_segment_eta_cache_idx").on(table.fromStopId, table.toStopId),
+}));
+
 export const systemSettings = pgTable("system_settings", {
   id: text("id").primaryKey(),
   driverTrackingIntervalSeconds: integer("driver_tracking_interval_seconds").notNull().default(10),
   driverTrackingDistanceMeters: integer("driver_tracking_distance_meters").notNull().default(15),
   offRouteThresholdMeters: integer("off_route_threshold_meters").notNull().default(250),
   offRouteAlertCooldownSeconds: integer("off_route_alert_cooldown_seconds").notNull().default(180),
+  mapboxEnabled:                boolean("mapbox_enabled").notNull().default(true),
+  mapboxCircuitBreakerLimit:    integer("mapbox_circuit_breaker_limit").notNull().default(80000),
+  mapboxSegmentCacheTtlSeconds: integer("mapbox_segment_cache_ttl_seconds").notNull().default(300),
+  mapboxCallsThisMonth:         integer("mapbox_calls_this_month").notNull().default(0),
+  mapboxCallsMonthKey:          text("mapbox_calls_month_key").notNull().default(""),
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().$onUpdateFn(() => new Date()).notNull(),
@@ -290,6 +320,8 @@ export const schema = {
   tripEmergencyReports,
   emailChangeRequests,
   appFeedback,
+  stopDwellTimes,
+  routeSegmentEtaCache,
   systemSettings,
 };
 
