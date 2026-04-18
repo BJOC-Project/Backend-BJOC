@@ -4,6 +4,7 @@ import { logger } from "../../config/logger";
 import { db } from "../../database/db";
 import {
   gpsLogs,
+  passengers,
   passengerTrips,
   stops,
   transitRoutes,
@@ -655,4 +656,26 @@ export async function passengerCancelBooking(
     .where(eq(passengerTrips.id, booking.id));
 
   logger.info({ msg: "Passenger booking cancelled", bookingId: booking.id, passengerUserId: userId });
+}
+
+export async function passengerSaveDeviceInfo(
+  userId: string,
+  input: {
+    expoPushToken?: string | null;
+    preferredStopId?: string | null;
+  },
+): Promise<void> {
+  const updates: Partial<{ expoPushToken: string | null; preferredStopId: string | null }> = {};
+
+  if (input.expoPushToken !== undefined) {
+    updates.expoPushToken = input.expoPushToken;
+  }
+
+  if (input.preferredStopId !== undefined) {
+    updates.preferredStopId = input.preferredStopId;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  await db.update(passengers).set(updates).where(eq(passengers.userId, userId));
 }

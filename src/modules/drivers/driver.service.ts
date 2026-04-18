@@ -54,6 +54,7 @@ import type {
   DriverUpdateBody,
 } from "./driver.validation";
 import { calculateMinimumRouteDistanceMeters } from "./driver-location.utils";
+import { checkAndSendNearbyStopNotifications } from "../push/expo-push.service";
 
 const ACTIVE_PASSENGER_STATUSES = ["booked", "waiting", "onboard"] as const;
 const DASHBOARD_TIME_ZONE = "Asia/Manila";
@@ -1188,6 +1189,16 @@ export async function driverTrackTripLocation(
       await recordStopDeparture(tripRow.id, previousStopId, now);
     }
   }
+
+  // Near-stop push notifications (fire and forget -- must not block GPS response)
+  void checkAndSendNearbyStopNotifications({
+    currentLat: input.latitude,
+    currentLng: input.longitude,
+    currentStopId,
+    routeStops,
+    vehicleId,
+    routeName: buildRouteLabel(tripRow),
+  }).catch((error) => logger.warn({ msg: "Near-stop notification check failed", error }));
 
   if (shouldTriggerOffRouteAlert && roundedRouteDistanceMeters !== null) {
     const alertMetadata = {

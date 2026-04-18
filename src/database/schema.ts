@@ -67,6 +67,8 @@ export const passengers = pgTable("passengers", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   username: text("username"),
   status: userStatusEnum("status").notNull().default("active"),
+  expoPushToken: text("expo_push_token"),
+  preferredStopId: uuid("preferred_stop_id").references(() => stops.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   passengersUsernameUnique: uniqueIndex("passengers_username_unique").on(table.username),
@@ -173,6 +175,7 @@ export const vehicleLocations = pgTable("vehicle_locations", {
   offRouteDistanceMeters: integer("off_route_distance_meters"),
   offRouteDetectedAt: timestamp("off_route_detected_at", { withTimezone: true }),
   lastOffRouteAlertAt: timestamp("last_off_route_alert_at", { withTimezone: true }),
+  lastNearbyNotifyStopId: uuid("last_nearby_notify_stop_id").references(() => stops.id, { onDelete: "set null" }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().$onUpdateFn(() => new Date()).notNull(),
 }, (table) => ({
   vehicleLocationsStopIndex: index("vehicle_locations_current_stop_id_idx").on(table.currentStopId),

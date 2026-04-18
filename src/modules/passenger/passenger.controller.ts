@@ -13,6 +13,7 @@ import {
   passengerListFavoriteTrips,
   passengerListRecentTrips,
   passengerListTrips,
+  passengerSaveDeviceInfo,
   passengerToggleFavorite,
   passengerViewProfile,
   passengerViewTripById,
@@ -140,4 +141,16 @@ export const passengerToggleTripFavorite = asyncHandler(async (
   const { is_favorite } = req.body as { is_favorite: boolean };
   await passengerToggleFavorite(req.authUser!.userId, tripId, is_favorite);
   sendSuccess(res, null, is_favorite ? "Trip added to favorites" : "Trip removed from favorites");
+});
+
+export const passengerSaveDevice = asyncHandler(async (
+  req: Request,
+  res: Response,
+) => {
+  const body = req.body as { expo_push_token?: string | null; preferred_stop_id?: string | null };
+  await passengerSaveDeviceInfo(req.authUser!.userId, {
+    expoPushToken: body.expo_push_token,
+    preferredStopId: body.preferred_stop_id,
+  });
+  sendSuccess(res, null, "Device info saved");
 });

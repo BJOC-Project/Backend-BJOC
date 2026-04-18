@@ -58,3 +58,10 @@ export const passengerTripFavoriteSchema = {
   params: passengerTripParamsSchema,
   body: z.object({ is_favorite: z.boolean() }),
 };
+
+export const passengerDeviceInfoSchema = {
+  body: z.object({
+    expo_push_token: z.string().max(500).nullable().optional(),
+    preferred_stop_id: z.string().uuid().nullable().optional(),
+  }),
+};

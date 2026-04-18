@@ -43,6 +43,13 @@
       "when": 1776497077402,
       "tag": "0005_clean_doctor_faustus",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776498083955,
+      "tag": "0006_giant_senator_kelly",
+      "breakpoints": true
     }
   ]
 }
