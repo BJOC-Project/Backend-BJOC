@@ -911,9 +911,11 @@ export async function driverGetTripManagement(
     : { etaMinutes: null };
   const etaMinutes = mapboxEtaMinutes !== null
     ? mapboxEtaMinutes
-    : nextStop
-      ? Math.max(0, Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000))
-      : 0;
+    : typeof distanceToNextStopKm === "number"
+      ? Math.max(0, Math.ceil((distanceToNextStopKm / 18) * 60))
+      : nextStop
+        ? Math.max(0, Math.round((nextStop.scheduled_time.getTime() - Date.now()) / 60_000))
+        : 0;
   const occupiedSeats = Math.max(
     0,
     Number(occupiedSeatRow?.occupiedSeats ?? 0),
