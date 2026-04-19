@@ -13,6 +13,7 @@ export type StopCoords = {
 };
 
 export type LegDuration = {
+  congestionLevel: "heavy" | "low" | "moderate";
   durationSeconds: number;
 };
 
@@ -58,6 +59,16 @@ function isUuid(value: string) {
   return UUID_RE.test(value);
 }
 
+function worstCongestion(levels: string[]): "heavy" | "low" | "moderate" {
+  for (const level of levels) {
+    if (level === "heavy" || level === "severe") return "heavy";
+  }
+  for (const level of levels) {
+    if (level === "moderate") return "moderate";
+  }
+  return "low";
+}
+
 export async function fetchLegDuration(
   fromStop: StopCoords,
   toStop: StopCoords,
@@ -92,7 +103,7 @@ export async function fetchLegDuration(
   if (canCache) {
     const ttlCutoff = new Date(Date.now() - mapboxSegmentCacheTtlSeconds * 1000);
     const [cached] = await db
-      .select({ durationSeconds: routeSegmentEtaCache.durationSeconds })
+      .select({ congestionLevel: routeSegmentEtaCache.congestionLevel, durationSeconds: routeSegmentEtaCache.durationSeconds })
       .from(routeSegmentEtaCache)
       .where(
         and(
@@ -104,28 +115,33 @@ export async function fetchLegDuration(
       .limit(1);
 
     if (cached) {
-      return { durationSeconds: cached.durationSeconds };
+      return {
+        congestionLevel: (cached.congestionLevel as "heavy" | "low" | "moderate" | null) ?? "low",
+        durationSeconds: cached.durationSeconds,
+      };
     }
   }
 
   // Cache miss — call Mapbox
   const coords = `${fromStop.longitude},${fromStop.latitude};${toStop.longitude},${toStop.latitude}`;
-  const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?access_token=${appEnv.MAPBOX_ACCESS_TOKEN}&overview=false`;
+  const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?access_token=${appEnv.MAPBOX_ACCESS_TOKEN}&overview=false&annotations=congestion`;
 
   let durationSeconds: number;
+  let congestionLevel: "heavy" | "low" | "moderate" = "low";
   try {
     const res = await fetch(url);
     if (!res.ok) {
       logger.warn({ msg: "Mapbox Directions API error", status: res.status, fromStopId: fromStop.id, toStopId: toStop.id });
       return null;
     }
-    const data = await res.json() as { routes?: { legs?: { duration?: number }[] }[] };
-    const duration = data.routes?.[0]?.legs?.[0]?.duration;
-    if (typeof duration !== "number") {
+    const data = await res.json() as { routes?: { legs?: { annotation?: { congestion?: string[] }; duration?: number }[] }[] };
+    const leg = data.routes?.[0]?.legs?.[0];
+    if (typeof leg?.duration !== "number") {
       logger.warn({ msg: "Mapbox response missing duration", fromStopId: fromStop.id, toStopId: toStop.id });
       return null;
     }
-    durationSeconds = Math.round(duration);
+    durationSeconds = Math.round(leg.duration);
+    congestionLevel = worstCongestion(leg.annotation?.congestion ?? []);
   } catch (err) {
     logger.warn({ msg: "Mapbox fetch failed", err, fromStopId: fromStop.id, toStopId: toStop.id });
     return null;
@@ -136,10 +152,10 @@ export async function fetchLegDuration(
     if (canCache) {
       await db
         .insert(routeSegmentEtaCache)
-        .values({ fromStopId: fromStop.id, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
+        .values({ congestionLevel, fromStopId: fromStop.id, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
         .onConflictDoUpdate({
           target: [routeSegmentEtaCache.fromStopId, routeSegmentEtaCache.toStopId],
-          set: { durationSeconds, cachedAt: new Date() },
+          set: { congestionLevel, durationSeconds, cachedAt: new Date() },
         });
     }
 
@@ -151,5 +167,5 @@ export async function fetchLegDuration(
     logger.warn({ msg: "Failed to persist Mapbox cache/counter", err });
   }
 
-  return { durationSeconds };
+  return { congestionLevel, durationSeconds };
 }

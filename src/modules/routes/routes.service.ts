@@ -1332,7 +1332,10 @@ export async function getStopArrivalEta(stopId: string): Promise<StopArrivalEtaR
 }
 
 export interface VehicleProgressStop {
+  congestionLevel: "heavy" | "low" | "moderate";
   etaMinutes: number;
+  latitude: number;
+  longitude: number;
   status: "passed" | "current" | "upcoming";
   stopId: string;
   stopName: string;
@@ -1343,6 +1346,7 @@ export interface VehicleProgressResult {
   availableSeats: number | null;
   currentStopOrder: number | null;
   plateNumber: string | null;
+  polyline: { latitude: number; longitude: number }[];
   routeId: string;
   routeName: string;
   stops: VehicleProgressStop[];
@@ -1413,13 +1417,17 @@ export async function getVehicleProgress(stopId: string): Promise<VehicleProgres
         : null;
 
       const progressStops: VehicleProgressStop[] = await Promise.all(
-        routeStops.map(async (stopRow): Promise<VehicleProgressStop> => {
+        routeStops.map(async (stopRow, index): Promise<VehicleProgressStop> => {
+          const lat = stopRow.latitude ?? 0;
+          const lng = stopRow.longitude ?? 0;
+          const stopName = stopRow.stopName ?? `Stop ${stopRow.stopOrder}`;
+
           if (currentStopOrder !== null && stopRow.stopOrder < currentStopOrder) {
-            return { etaMinutes: 0, status: "passed", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+            return { congestionLevel: "low", etaMinutes: 0, latitude: lat, longitude: lng, status: "passed", stopId: stopRow.id, stopName, stopOrder: stopRow.stopOrder };
           }
 
           if (currentStopOrder !== null && stopRow.stopOrder === currentStopOrder) {
-            return { etaMinutes: 0, status: "current", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+            return { congestionLevel: "low", etaMinutes: 0, latitude: lat, longitude: lng, status: "current", stopId: stopRow.id, stopName, stopOrder: stopRow.stopOrder };
           }
 
           const etaResult = await calculateEta({
@@ -1433,7 +1441,22 @@ export async function getVehicleProgress(stopId: string): Promise<VehicleProgres
             tripStatus: "ongoing",
           });
 
-          return { etaMinutes: etaResult.etaMinutes ?? 0, status: "upcoming", stopId: stopRow.id, stopName: stopRow.stopName ?? `Stop ${stopRow.stopOrder}`, stopOrder: stopRow.stopOrder };
+          // Get congestion for the leg immediately before this stop (cache hit after calculateEta)
+          let congestionLevel: "heavy" | "low" | "moderate" = "low";
+          const prevStopRow = index > 0 ? routeStops[index - 1] : null;
+          if (
+            prevStopRow &&
+            prevStopRow.latitude !== null && prevStopRow.longitude !== null &&
+            stopRow.latitude !== null && stopRow.longitude !== null
+          ) {
+            const legResult = await fetchLegDuration(
+              { id: prevStopRow.id, latitude: prevStopRow.latitude, longitude: prevStopRow.longitude },
+              { id: stopRow.id, latitude: stopRow.latitude, longitude: stopRow.longitude },
+            );
+            if (legResult) congestionLevel = legResult.congestionLevel;
+          }
+
+          return { congestionLevel, etaMinutes: etaResult.etaMinutes ?? 0, latitude: lat, longitude: lng, status: "upcoming", stopId: stopRow.id, stopName, stopOrder: stopRow.stopOrder };
         }),
       );
 
@@ -1446,6 +1469,9 @@ export async function getVehicleProgress(stopId: string): Promise<VehicleProgres
         availableSeats,
         currentStopOrder,
         plateNumber: trip.plateNumber,
+        polyline: routeStops
+          .filter((s) => s.latitude !== null && s.longitude !== null)
+          .map((s) => ({ latitude: s.latitude!, longitude: s.longitude! })),
         routeId: trip.routeId,
         routeName: trip.routeName ?? routeId,
         stops: progressStops,
