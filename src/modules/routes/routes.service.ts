@@ -1465,13 +1465,43 @@ export async function getVehicleProgress(stopId: string): Promise<VehicleProgres
           ? Math.max(0, trip.seatCapacity - trip.recordedPassengerCount)
           : null;
 
+      // Build road-following polyline from cached Mapbox leg geometries
+      const coordStops = routeStops.filter(
+        (s): s is typeof s & { latitude: number; longitude: number } =>
+          typeof s.latitude === "number" && typeof s.longitude === "number",
+      );
+      const legGeometries = await Promise.all(
+        coordStops.slice(0, -1).map((fromStop, i) => {
+          const toStop = coordStops[i + 1]!;
+          return fetchLegDuration(
+            { id: fromStop.id, latitude: fromStop.latitude, longitude: fromStop.longitude },
+            { id: toStop.id, latitude: toStop.latitude, longitude: toStop.longitude },
+          );
+        }),
+      );
+      const roadPolyline: { latitude: number; longitude: number }[] = [];
+      for (let i = 0; i < legGeometries.length; i++) {
+        const leg = legGeometries[i];
+        if (leg && leg.geometry.length > 0) {
+          // Skip first point of each leg (except the very first) to avoid duplicates
+          roadPolyline.push(...(i === 0 ? leg.geometry : leg.geometry.slice(1)));
+        } else if (coordStops[i]) {
+          // Fallback: use straight line if geometry unavailable
+          const s = coordStops[i]!;
+          roadPolyline.push({ latitude: s.latitude, longitude: s.longitude });
+        }
+      }
+      // Ensure last stop is included
+      const lastCoordStop = coordStops.at(-1);
+      if (lastCoordStop && (roadPolyline.length === 0 || legGeometries.every((l) => !l?.geometry.length))) {
+        roadPolyline.push({ latitude: lastCoordStop.latitude, longitude: lastCoordStop.longitude });
+      }
+
       results.push({
         availableSeats,
         currentStopOrder,
         plateNumber: trip.plateNumber,
-        polyline: routeStops
-          .filter((s) => s.latitude !== null && s.longitude !== null)
-          .map((s) => ({ latitude: s.latitude!, longitude: s.longitude! })),
+        polyline: roadPolyline.length > 0 ? roadPolyline : coordStops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
         routeId: trip.routeId,
         routeName: trip.routeName ?? routeId,
         stops: progressStops,

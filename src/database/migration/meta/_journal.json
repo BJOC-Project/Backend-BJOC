@@ -57,6 +57,13 @@
       "when": 1776600000000,
       "tag": "0007_add_congestion_level",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776640000000,
+      "tag": "0008_add_geometry_to_eta_cache",
+      "breakpoints": true
     }
   ]
 }

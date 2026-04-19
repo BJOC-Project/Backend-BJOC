@@ -285,6 +285,7 @@ export const routeSegmentEtaCache = pgTable("route_segment_eta_cache", {
   toStopId:        uuid("to_stop_id").notNull().references(() => stops.id, { onDelete: "cascade" }),
   durationSeconds: integer("duration_seconds").notNull(),
   congestionLevel: text("congestion_level"),
+  geometry:        text("geometry"),
   cachedAt:        timestamp("cached_at", { withTimezone: true }).notNull(),
 }, (table) => ({
   segmentCacheIdx: uniqueIndex("route_segment_eta_cache_idx").on(table.fromStopId, table.toStopId),

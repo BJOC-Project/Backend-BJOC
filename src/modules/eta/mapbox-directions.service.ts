@@ -15,6 +15,7 @@ export type StopCoords = {
 export type LegDuration = {
   congestionLevel: "heavy" | "low" | "moderate";
   durationSeconds: number;
+  geometry: { latitude: number; longitude: number }[];
 };
 
 /**
@@ -103,7 +104,7 @@ export async function fetchLegDuration(
   if (canCache) {
     const ttlCutoff = new Date(Date.now() - mapboxSegmentCacheTtlSeconds * 1000);
     const [cached] = await db
-      .select({ congestionLevel: routeSegmentEtaCache.congestionLevel, durationSeconds: routeSegmentEtaCache.durationSeconds })
+      .select({ congestionLevel: routeSegmentEtaCache.congestionLevel, durationSeconds: routeSegmentEtaCache.durationSeconds, geometry: routeSegmentEtaCache.geometry })
       .from(routeSegmentEtaCache)
       .where(
         and(
@@ -118,44 +119,55 @@ export async function fetchLegDuration(
       return {
         congestionLevel: (cached.congestionLevel as "heavy" | "low" | "moderate" | null) ?? "low",
         durationSeconds: cached.durationSeconds,
+        geometry: cached.geometry ? (JSON.parse(cached.geometry) as { latitude: number; longitude: number }[]) : [],
       };
     }
   }
 
   // Cache miss — call Mapbox
   const coords = `${fromStop.longitude},${fromStop.latitude};${toStop.longitude},${toStop.latitude}`;
-  const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?access_token=${appEnv.MAPBOX_ACCESS_TOKEN}&overview=false&annotations=congestion`;
+  const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?access_token=${appEnv.MAPBOX_ACCESS_TOKEN}&overview=full&geometries=geojson&annotations=congestion`;
 
   let durationSeconds: number;
   let congestionLevel: "heavy" | "low" | "moderate" = "low";
+  let geometry: { latitude: number; longitude: number }[] = [];
   try {
     const res = await fetch(url);
     if (!res.ok) {
       logger.warn({ msg: "Mapbox Directions API error", status: res.status, fromStopId: fromStop.id, toStopId: toStop.id });
       return null;
     }
-    const data = await res.json() as { routes?: { legs?: { annotation?: { congestion?: string[] }; duration?: number }[] }[] };
-    const leg = data.routes?.[0]?.legs?.[0];
+    const data = await res.json() as {
+      routes?: {
+        geometry?: { coordinates?: [number, number][] };
+        legs?: { annotation?: { congestion?: string[] }; duration?: number }[];
+      }[];
+    };
+    const route = data.routes?.[0];
+    const leg = route?.legs?.[0];
     if (typeof leg?.duration !== "number") {
       logger.warn({ msg: "Mapbox response missing duration", fromStopId: fromStop.id, toStopId: toStop.id });
       return null;
     }
     durationSeconds = Math.round(leg.duration);
     congestionLevel = worstCongestion(leg.annotation?.congestion ?? []);
+    geometry = (route?.geometry?.coordinates ?? []).map(([lng, lat]) => ({ latitude: lat, longitude: lng }));
   } catch (err) {
     logger.warn({ msg: "Mapbox fetch failed", err, fromStopId: fromStop.id, toStopId: toStop.id });
     return null;
   }
+
+  const geometryJson = geometry.length > 0 ? JSON.stringify(geometry) : null;
 
   // Upsert cache row and increment counter (best-effort — don't fail ETA on DB error)
   try {
     if (canCache) {
       await db
         .insert(routeSegmentEtaCache)
-        .values({ congestionLevel, fromStopId: fromStop.id, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
+        .values({ congestionLevel, fromStopId: fromStop.id, geometry: geometryJson, toStopId: toStop.id, durationSeconds, cachedAt: new Date() })
         .onConflictDoUpdate({
           target: [routeSegmentEtaCache.fromStopId, routeSegmentEtaCache.toStopId],
-          set: { congestionLevel, durationSeconds, cachedAt: new Date() },
+          set: { congestionLevel, geometry: geometryJson, durationSeconds, cachedAt: new Date() },
         });
     }
 
@@ -167,5 +179,5 @@ export async function fetchLegDuration(
     logger.warn({ msg: "Failed to persist Mapbox cache/counter", err });
   }
 
-  return { congestionLevel, durationSeconds };
+  return { congestionLevel, durationSeconds, geometry };
 }
